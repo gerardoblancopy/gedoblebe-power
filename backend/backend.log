@@ -1,0 +1,211 @@
+INFO:     Will watch for changes in these directories: ['/Users/gerardoblanco/Library/CloudStorage/Dropbox/GEDOBLEBE POWER/backend']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [69462] using StatReload
+INFO:     Started server process [69542]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'app/solver/opf_solver.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [69542]
+INFO:     Started server process [69860]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:60011 - "GET /cases HTTP/1.1" 200 OK
+INFO:app.parser.matpower:Parsed 118 buses, 54 generators, 186 lines, 99 loads
+INFO:app.main:Loaded server case case118.m
+INFO:     127.0.0.1:60020 - "POST /cases/case118.m/load HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60020 - "GET /cases HTTP/1.1" 200 OK
+INFO:app.parser.matpower:Parsed 30 buses, 6 generators, 41 lines, 20 loads
+INFO:app.main:Loaded server case case30.m
+INFO:     127.0.0.1:60034 - "POST /cases/case30.m/load HTTP/1.1" 200 OK
+INFO:app.solver.opf_solver:QP solver: `gtol` termination condition is satisfied., max violation: -4.3673%
+INFO:app.solver.opf_solver:--- OPF DEBUG ---
+INFO:app.solver.opf_solver:Real Gen Pmax: [80. 80. 50. 55. 30. 40.]
+INFO:app.solver.opf_solver:Real Gen Costs: [[0.02, 2.0, 0.0], [0.0175, 1.75, 0.0], [0.0625, 1.0, 0.0], [0.00834, 3.25, 0.0], [0.025, 3.0, 0.0], [0.025, 3.0, 0.0]]
+INFO:app.solver.opf_solver:Pg MW: [44.72990864 58.2627527  22.31357078 32.32591967 15.78392687 15.78392697]
+INFO:app.solver.opf_solver:Gen Cost: 565.2059877678896
+INFO:app.solver.opf_solver:Curtailment MW: -5.601524364764066e-06
+INFO:app.solver.opf_solver:Curtailment Cost: -0.056015243647640656
+INFO:app.solver.opf_solver:Total Cost: 565.149972524242
+INFO:app.solver.opf_solver:-----------------
+INFO:app.solver.opf_solver:DC OPF solved. Cost: 565.21 $/h, Curtailment: -0.00 MW
+INFO:app.main:OPF solved successfully. Total cost: 565.149972524242
+INFO:     127.0.0.1:60034 - "POST /opf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60390 - "GET /cases HTTP/1.1" 200 OK
+INFO:app.parser.matpower:Parsed 118 buses, 54 generators, 186 lines, 99 loads
+INFO:app.main:Loaded server case case118.m
+INFO:     127.0.0.1:60417 - "POST /cases/case118.m/load HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60555 - "GET /cases HTTP/1.1" 200 OK
+INFO:app.parser.matpower:Parsed 118 buses, 54 generators, 186 lines, 99 loads
+INFO:app.main:Loaded server case case118.m
+INFO:     127.0.0.1:60555 - "POST /cases/case118.m/load HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60645 - "GET /cases HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60739 - "GET /cases HTTP/1.1" 200 OK
+INFO:app.parser.matpower:Parsed 118 buses, 54 generators, 186 lines, 99 loads
+INFO:app.main:Loaded server case case118.m
+INFO:     127.0.0.1:60739 - "POST /cases/case118.m/load HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60871 - "OPTIONS /opf HTTP/1.1" 200 OK
+INFO:app.solver.opf_solver:QP solver: `xtol` termination condition is satisfied., max violation: -9463.9189%
+INFO:app.solver.opf_solver:--- OPF DEBUG ---
+INFO:app.solver.opf_solver:Real Gen Pmax: [100.  100.  100.  100.  550.  185.  100.  100.  100.  100.  320.  414.
+ 100.  107.  100.  100.  100.  100.  100.  119.  304.  148.  100.  100.
+ 255.  260.  100.  491.  492.  805.2 100.  100.  100.  100.  100.  100.
+ 577.  100.  104.  707.  100.  100.  100.  100.  352.  140.  100.  100.
+ 100.  100.  136.  100.  100.  100. ]
+INFO:app.solver.opf_solver:Real Gen Costs: [[0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.0222222, 20.0, 0.0], [0.117647, 20.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.0454545, 20.0, 0.0], [0.0318471, 20.0, 0.0], [0.01, 40.0, 0.0], [1.42857, 20.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.526316, 20.0, 0.0], [0.0490196, 20.0, 0.0], [0.208333, 20.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.0645161, 20.0, 0.0], [0.0625, 20.0, 0.0], [0.01, 40.0, 0.0], [0.0255754, 20.0, 0.0], [0.0255102, 20.0, 0.0], [0.0193648, 20.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.0209644, 20.0, 0.0], [0.01, 40.0, 0.0], [2.5, 20.0, 0.0], [0.0164745, 20.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.0396825, 20.0, 0.0], [0.25, 20.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.277778, 20.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0]]
+INFO:app.solver.opf_solver:Pg MW: [4.29881373e-06 4.32383857e-06 3.26603904e-06 4.10792360e-06
+ 4.36081112e+02 8.23708357e+01 4.02715072e-06 4.06560519e-06
+ 3.94546059e-06 4.33865592e-06 2.13195211e+02 3.04287722e+02
+ 3.66131093e-06 6.78348174e+00 3.61967899e-06 4.27831248e-06
+ 3.42128822e-06 4.35003651e-06 4.19917812e-06 1.84122876e+01
+ 1.97689936e+02 4.65153454e+01 7.52572753e-08 3.44043884e-06
+ 1.50205631e+02 1.55050903e+02 3.32059150e-06 3.78906357e+02
+ 3.79874780e+02 5.00427665e+02 2.30118524e-06 5.37288305e-07
+ 3.30163261e-06 3.40537348e-06 3.41115769e-06 3.51404303e-06
+ 4.62244647e+02 3.96842053e-06 3.87627179e+00 5.88223118e+02
+ 2.63856341e-06 3.59699682e-06 4.73557128e-07 3.87076267e-06
+ 2.44205421e+02 3.87627262e+01 4.34452759e-06 4.34746706e-06
+ 4.34632395e-06 4.12913200e-06 3.48864256e+01 3.98019039e-06
+ 3.81559784e-06 4.17151952e-06]
+INFO:app.solver.opf_solver:Gen Cost: 125947.87275443746
+INFO:app.solver.opf_solver:Curtailment MW: 2.2528789892676153e-08
+INFO:app.solver.opf_solver:Curtailment Cost: 0.00022528789892676152
+INFO:app.solver.opf_solver:Total Cost: 125947.87297972536
+INFO:app.solver.opf_solver:-----------------
+INFO:app.solver.opf_solver:DC OPF solved. Cost: 125947.87 $/h, Curtailment: 0.00 MW
+INFO:app.main:OPF solved successfully. Total cost: 125947.87297972536
+INFO:     127.0.0.1:60871 - "POST /opf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61007 - "GET /cases HTTP/1.1" 200 OK
+INFO:app.parser.matpower:Parsed 118 buses, 54 generators, 186 lines, 99 loads
+INFO:app.main:Loaded server case case118.m
+INFO:     127.0.0.1:61010 - "POST /cases/case118.m/load HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61036 - "GET /cases HTTP/1.1" 200 OK
+INFO:app.parser.matpower:Parsed 14 buses, 5 generators, 20 lines, 11 loads
+INFO:app.main:Loaded server case case14.m
+INFO:     127.0.0.1:61075 - "POST /cases/case14.m/load HTTP/1.1" 200 OK
+INFO:app.solver.opf_solver:QP solver: `gtol` termination condition is satisfied., max violation: -9750.4705%
+INFO:app.solver.opf_solver:--- OPF DEBUG ---
+INFO:app.solver.opf_solver:Real Gen Pmax: [332.4 140.  100.  100.  100. ]
+INFO:app.solver.opf_solver:Real Gen Costs: [[0.0430293, 20.0, 0.0], [0.25, 20.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0], [0.01, 40.0, 0.0]]
+INFO:app.solver.opf_solver:Pg MW: [ 2.20967677e+02  3.80323378e+01 -7.74080392e-07 -8.46247669e-07
+ -7.75839640e-07]
+INFO:app.solver.opf_solver:Gen Cost: 7642.594209018437
+INFO:app.solver.opf_solver:Curtailment MW: -1.2174835127031186e-05
+INFO:app.solver.opf_solver:Curtailment Cost: -0.12174835127031186
+INFO:app.solver.opf_solver:Total Cost: 7642.472460667167
+INFO:app.solver.opf_solver:-----------------
+INFO:app.solver.opf_solver:DC OPF solved. Cost: 7642.59 $/h, Curtailment: -0.00 MW
+INFO:app.main:OPF solved successfully. Total cost: 7642.472460667167
+INFO:     127.0.0.1:61131 - "POST /opf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61157 - "GET /cases HTTP/1.1" 200 OK
+INFO:app.parser.matpower:Parsed 30 buses, 6 generators, 41 lines, 20 loads
+INFO:app.main:Loaded server case case30.m
+INFO:     127.0.0.1:61157 - "POST /cases/case30.m/load HTTP/1.1" 200 OK
+INFO:app.solver.opf_solver:QP solver: `gtol` termination condition is satisfied., max violation: -4.3673%
+INFO:app.solver.opf_solver:--- OPF DEBUG ---
+INFO:app.solver.opf_solver:Real Gen Pmax: [80. 80. 50. 55. 30. 40.]
+INFO:app.solver.opf_solver:Real Gen Costs: [[0.02, 2.0, 0.0], [0.0175, 1.75, 0.0], [0.0625, 1.0, 0.0], [0.00834, 3.25, 0.0], [0.025, 3.0, 0.0], [0.025, 3.0, 0.0]]
+INFO:app.solver.opf_solver:Pg MW: [44.72990864 58.2627527  22.31357078 32.32591967 15.78392687 15.78392697]
+INFO:app.solver.opf_solver:Gen Cost: 565.2059877678896
+INFO:app.solver.opf_solver:Curtailment MW: -5.601524364764066e-06
+INFO:app.solver.opf_solver:Curtailment Cost: -0.056015243647640656
+INFO:app.solver.opf_solver:Total Cost: 565.149972524242
+INFO:app.solver.opf_solver:-----------------
+INFO:app.solver.opf_solver:DC OPF solved. Cost: 565.21 $/h, Curtailment: -0.00 MW
+INFO:app.main:OPF solved successfully. Total cost: 565.149972524242
+INFO:     127.0.0.1:61177 - "POST /opf HTTP/1.1" 200 OK
+INFO:app.solver.opf_solver:QP solver: `gtol` termination condition is satisfied., max violation: -4.0487%
+INFO:app.solver.opf_solver:--- OPF DEBUG ---
+INFO:app.solver.opf_solver:Real Gen Pmax: [80. 80. 50. 55. 30. 40.]
+INFO:app.solver.opf_solver:Real Gen Costs: [[0.02, 2.0, 0.0], [0.0175, 1.75, 0.0], [0.0625, 1.0, 0.0], [0.00834, 3.25, 0.0], [0.025, 3.0, 0.0], [0.025, 3.0, 0.0]]
+INFO:app.solver.opf_solver:Pg MW: [44.88468448 58.43963937 22.36309905 32.69708473 15.90774755 15.90774764]
+INFO:app.solver.opf_solver:Gen Cost: 568.9982689447394
+INFO:app.solver.opf_solver:Curtailment MW: -2.8206926601436305e-06
+INFO:app.solver.opf_solver:Curtailment Cost: -0.028206926601436304
+INFO:app.solver.opf_solver:Total Cost: 568.9700620181379
+INFO:app.solver.opf_solver:-----------------
+INFO:app.solver.opf_solver:DC OPF solved. Cost: 569.00 $/h, Curtailment: -0.00 MW
+INFO:app.main:OPF solved successfully. Total cost: 568.9700620181379
+INFO:     127.0.0.1:61229 - "POST /opf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61237 - "OPTIONS /opf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61242 - "OPTIONS /opf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61246 - "OPTIONS /opf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61249 - "OPTIONS /opf HTTP/1.1" 200 OK
+INFO:app.solver.opf_solver:QP solver: `gtol` termination condition is satisfied., max violation: -3.7300%
+INFO:app.solver.opf_solver:--- OPF DEBUG ---
+INFO:app.solver.opf_solver:Real Gen Pmax: [80. 80. 50. 55. 30. 40.]
+INFO:app.solver.opf_solver:Real Gen Costs: [[0.02, 2.0, 0.0], [0.0175, 1.75, 0.0], [0.0625, 1.0, 0.0], [0.00834, 3.25, 0.0], [0.025, 3.0, 0.0], [0.025, 3.0, 0.0]]
+INFO:app.solver.opf_solver:Pg MW: [45.03946075 58.61652654 22.41262746 33.06825082 16.03156857 16.03156866]
+INFO:app.solver.opf_solver:Gen Cost: 572.7967517785538
+INFO:app.solver.opf_solver:Curtailment MW: -2.8028823845646147e-06
+INFO:app.solver.opf_solver:Curtailment Cost: -0.028028823845646148
+INFO:app.solver.opf_solver:Total Cost: 572.7687229547082
+INFO:app.solver.opf_solver:-----------------
+INFO:app.solver.opf_solver:DC OPF solved. Cost: 572.80 $/h, Curtailment: -0.00 MW
+INFO:app.main:OPF solved successfully. Total cost: 572.7687229547082
+INFO:     127.0.0.1:61237 - "POST /opf HTTP/1.1" 200 OK
+INFO:app.solver.opf_solver:QP solver: `gtol` termination condition is satisfied., max violation: -0.5435%
+INFO:app.solver.opf_solver:--- OPF DEBUG ---
+INFO:app.solver.opf_solver:Real Gen Pmax: [80. 80. 50. 55. 30. 40.]
+INFO:app.solver.opf_solver:Real Gen Costs: [[0.02, 2.0, 0.0], [0.0175, 1.75, 0.0], [0.0625, 1.0, 0.0], [0.00834, 3.25, 0.0], [0.025, 3.0, 0.0], [0.025, 3.0, 0.0]]
+INFO:app.solver.opf_solver:Pg MW: [46.58722464 60.38539955 22.90791208 36.77991106 17.26978025 17.26978003]
+INFO:app.solver.opf_solver:Gen Cost: 611.1221071697374
+INFO:app.solver.opf_solver:Curtailment MW: -7.612899263347201e-06
+INFO:app.solver.opf_solver:Curtailment Cost: -0.07612899263347202
+INFO:app.solver.opf_solver:Total Cost: 611.045978177104
+INFO:app.solver.opf_solver:-----------------
+INFO:app.solver.opf_solver:DC OPF solved. Cost: 611.12 $/h, Curtailment: -0.00 MW
+INFO:app.main:OPF solved successfully. Total cost: 611.045978177104
+INFO:     127.0.0.1:61249 - "POST /opf HTTP/1.1" 200 OK
+INFO:app.solver.opf_solver:--- OPF DEBUG ---
+INFO:app.solver.opf_solver:Real Gen Pmax: [80. 80. 50. 55. 30. 40.]
+INFO:app.solver.opf_solver:Real Gen Costs: [[0.02, 2.0, 0.0], [0.0175, 1.75, 0.0], [0.0625, 1.0, 0.0], [0.00834, 3.25, 0.0], [0.025, 3.0, 0.0], [0.025, 3.0, 0.0]]
+INFO:app.solver.opf_solver:Pg MW: [46.58725773 60.38538207 22.9079093  36.77991939 17.26980051 17.269731  ]
+INFO:app.solver.opf_solver:Gen Cost: 611.1220777668228
+INFO:app.solver.opf_solver:Curtailment MW: 0.0
+INFO:app.solver.opf_solver:Curtailment Cost: 0.0
+INFO:app.solver.opf_solver:Total Cost: 611.1220777668228
+INFO:app.solver.opf_solver:-----------------
+INFO:app.solver.opf_solver:DC OPF solved. Cost: 611.12 $/h, Curtailment: 0.00 MW
+INFO:app.main:OPF solved successfully. Total cost: 611.1220777668228
+INFO:     127.0.0.1:61246 - "POST /opf HTTP/1.1" 200 OK
+INFO:app.solver.opf_solver:QP solver: `gtol` termination condition is satisfied., max violation: -0.5435%
+INFO:app.solver.opf_solver:--- OPF DEBUG ---
+INFO:app.solver.opf_solver:Real Gen Pmax: [80. 80. 50. 55. 30. 40.]
+INFO:app.solver.opf_solver:Real Gen Costs: [[0.02, 2.0, 0.0], [0.0175, 1.75, 0.0], [0.0625, 1.0, 0.0], [0.00834, 3.25, 0.0], [0.025, 3.0, 0.0], [0.025, 3.0, 0.0]]
+INFO:app.solver.opf_solver:Pg MW: [46.58722464 60.38539955 22.90791208 36.77991106 17.26978025 17.26978003]
+INFO:app.solver.opf_solver:Gen Cost: 611.1221071697374
+INFO:app.solver.opf_solver:Curtailment MW: -7.612899263347201e-06
+INFO:app.solver.opf_solver:Curtailment Cost: -0.07612899263347202
+INFO:app.solver.opf_solver:Total Cost: 611.045978177104
+INFO:app.solver.opf_solver:-----------------
+INFO:app.solver.opf_solver:DC OPF solved. Cost: 611.12 $/h, Curtailment: -0.00 MW
+INFO:app.main:OPF solved successfully. Total cost: 611.045978177104
+INFO:     127.0.0.1:61242 - "POST /opf HTTP/1.1" 200 OK
+INFO:app.solver.opf_solver:--- OPF DEBUG ---
+INFO:app.solver.opf_solver:Real Gen Pmax: [80. 80. 50. 55. 30. 40.]
+INFO:app.solver.opf_solver:Real Gen Costs: [[0.02, 2.0, 0.0], [0.0175, 1.75, 0.0], [0.0625, 1.0, 0.0], [0.00834, 3.25, 0.0], [0.025, 3.0, 0.0], [0.025, 3.0, 0.0]]
+INFO:app.solver.opf_solver:Pg MW: [46.58725773 60.38538207 22.9079093  36.77991939 17.26980051 17.269731  ]
+INFO:app.solver.opf_solver:Gen Cost: 611.1220777668228
+INFO:app.solver.opf_solver:Curtailment MW: 0.0
+INFO:app.solver.opf_solver:Curtailment Cost: 0.0
+INFO:app.solver.opf_solver:Total Cost: 611.1220777668228
+INFO:app.solver.opf_solver:-----------------
+INFO:app.solver.opf_solver:DC OPF solved. Cost: 611.12 $/h, Curtailment: 0.00 MW
+INFO:app.main:OPF solved successfully. Total cost: 611.1220777668228
+INFO:     127.0.0.1:61229 - "POST /opf HTTP/1.1" 200 OK
+INFO:app.solver.opf_solver:QP solver: `gtol` termination condition is satisfied., max violation: -0.5435%
+INFO:app.solver.opf_solver:--- OPF DEBUG ---
+INFO:app.solver.opf_solver:Real Gen Pmax: [80. 80. 50. 55. 30. 40.]
+INFO:app.solver.opf_solver:Real Gen Costs: [[0.02, 2.0, 0.0], [0.0175, 1.75, 0.0], [0.0625, 1.0, 0.0], [0.00834, 3.25, 0.0], [0.025, 3.0, 0.0], [0.025, 3.0, 0.0]]
+INFO:app.solver.opf_solver:Pg MW: [46.58722464 60.38539955 22.90791208 36.77991106 17.26978025 17.26978003]
+INFO:app.solver.opf_solver:Gen Cost: 611.1221071697374
+INFO:app.solver.opf_solver:Curtailment MW: -7.612899263347201e-06
+INFO:app.solver.opf_solver:Curtailment Cost: -0.07612899263347202
+INFO:app.solver.opf_solver:Total Cost: 611.045978177104
+INFO:app.solver.opf_solver:-----------------
+INFO:app.solver.opf_solver:DC OPF solved. Cost: 611.12 $/h, Curtailment: -0.00 MW
+INFO:app.main:OPF solved successfully. Total cost: 611.045978177104
+INFO:     127.0.0.1:61262 - "POST /opf HTTP/1.1" 200 OK

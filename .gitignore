@@ -1,0 +1,22 @@
+# Node.js
+node_modules/
+dist/
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+.pytest_cache/
+
+# System
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# Artifacts
+*.old
+*.bak
