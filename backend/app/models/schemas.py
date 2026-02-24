@@ -13,12 +13,16 @@ class Bus(BaseModel):
     type: int = Field(1, description="Bus type: 1=PQ, 2=PV, 3=slack")
     v_mag: float = Field(1.0, description="Voltage magnitude (pu)")
     v_ang: float = Field(0.0, description="Voltage angle (degrees)")
+    g_shunt: float = Field(0.0, description="Shunt conductance (pu)")
+    b_shunt: float = Field(0.0, description="Shunt susceptance (pu)")
     base_kv: float = Field(345.0, description="Base voltage (kV)")
     zone: int = Field(1, description="Zone number")
 
 
 class Generator(BaseModel):
     """Generator model"""
+    id: Optional[str] = Field(None, description="Unique generator ID")
+    name: Optional[str] = Field(None, description="Generator name (display label)")
     bus: int = Field(..., description="Bus number where generator is connected")
     pg: float = Field(0.0, description="Real power output (MW)")
     qg: float = Field(0.0, description="Reactive power output (MVAR)")
@@ -30,6 +34,7 @@ class Generator(BaseModel):
     qmin: float = Field(-300.0, description="Minimum reactive power (MVAR)")
     cost: List[float] = Field(default_factory=lambda: [0, 25, 0],
                                description="Cost coefficients [a, b, c] in $/h")
+    status: int = Field(1, description="Status (1=in service, 0=out of service)")
 
 
 class Line(BaseModel):
@@ -42,6 +47,7 @@ class Line(BaseModel):
     rate_a: float = Field(250.0, description="Long term rating (MW)")
     rate_b: float = Field(250.0, description="Short term rating (MW)")
     rate_c: float = Field(250.0, description="Emergency rating (MW)")
+    status: int = Field(1, description="Status (1=in service, 0=out of service)")
 
 
 class Load(BaseModel):
@@ -74,10 +80,12 @@ class OPFRequest(BaseModel):
     case_data: Optional[PowerSystem] = None
     voll: float = Field(10000.0, description="Value of Lost Load ($/MWh)")
     enforce_line_limits: bool = Field(True, description="Enforce line loading constraints")
+    remove_isolated: bool = Field(False, description="Automatically remove buses and components not connected to the slack bus")
 
 
 class GeneratorResult(BaseModel):
     """Generator result"""
+    id: Optional[str] = Field(None, description="Generator ID")
     bus: int
     pg: float = Field(..., description="Real power output (MW)")
     qg: float = Field(..., description="Reactive power output (MVAR)")

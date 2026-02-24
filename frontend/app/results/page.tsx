@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { usePowerSystemStore } from '@/lib/store';
+import { triggerExport } from '@/lib/api';
 import {
   PieChart,
   Pie,
@@ -27,6 +28,15 @@ const fmt = (n: number, decimals = 1) =>
 export default function ResultsPage() {
   const pathname = usePathname();
   const { results, buses, generators, lines, loads } = usePowerSystemStore();
+
+  const handleExport = (format: 'csv' | 'json') => {
+    try {
+      triggerExport(format);
+    } catch (error) {
+      console.error('Export failed:', error);
+      alert('Failed to initiate export.');
+    }
+  };
 
   if (!results) {
     return (
@@ -98,6 +108,13 @@ export default function ResultsPage() {
         <nav className="header-nav">
           <Link href="/" className={`nav-btn ${pathname === '/' ? 'active' : ''}`}>Editor</Link>
           <Link href="/results" className={`nav-btn ${pathname === '/results' ? 'active' : ''}`}>Results</Link>
+          <div style={{ width: '1px', height: '24px', background: '#2e3348', margin: '0 0.5rem' }}></div>
+          <button onClick={() => handleExport('csv')} className="nav-btn" title="Download CSV">
+            Start CSV Export
+          </button>
+          <button onClick={() => handleExport('json')} className="nav-btn" title="Download JSON">
+            JSON
+          </button>
         </nav>
       </header>
 
@@ -172,8 +189,8 @@ export default function ResultsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {results.generator_results.map((g) => (
-                      <tr key={g.bus}>
+                    {results.generator_results.map((g, idx) => (
+                      <tr key={g.id || `${g.bus}-${idx}`}>
                         <td><span className="mono-cell">{busLabel(g.bus)}</span></td>
                         <td className="num-cell">{fmt(g.pg)}</td>
                         <td className="num-cell">{fmt(g.qg)}</td>

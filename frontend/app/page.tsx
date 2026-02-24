@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { usePowerSystemStore } from '@/lib/store';
+import { Generator } from '@/lib/api';
 import {
   runOPF,
   loadCase,
@@ -15,6 +16,7 @@ import {
   downloadBlob,
   getAvailableCases,
   loadServerCase,
+  saveServerCase,
 } from '@/lib/api';
 import NetworkCanvas from '@/components/NetworkCanvas';
 import BusEditor from '@/components/BusEditor';
@@ -30,6 +32,7 @@ export default function HomePage() {
   const [importError, setImportError] = useState<string | null>(null);
   const [importSuccess, setImportSuccess] = useState(false);
   const [enforceLineLimits, setEnforceLineLimits] = useState(true);
+  const [removeIsolated, setRemoveIsolated] = useState(false);
   const [voll, setVoll] = useState(10000);
   const [autoRun, setAutoRun] = useState(false);
   const [dataStale, setDataStale] = useState(false);
@@ -87,7 +90,7 @@ export default function HomePage() {
         base_mva: baseMVA,
       };
 
-      const result = await runOPF(system, enforceLineLimits, voll);
+      const result = await runOPF(system, enforceLineLimits, voll, removeIsolated);
       setResults(result);
       setDataStale(false);
       hasRanOnce.current = true;
@@ -103,7 +106,7 @@ export default function HomePage() {
     if (hasRanOnce.current) {
       setDataStale(true);
     }
-  }, [buses, generators, lines, loads, baseMVA, enforceLineLimits, voll]);
+  }, [buses, generators, lines, loads, baseMVA, enforceLineLimits, voll, removeIsolated]);
 
   // Auto-rerun OPF with debounce when autoRun is enabled
   useEffect(() => {
@@ -118,7 +121,7 @@ export default function HomePage() {
     return () => {
       if (autoRunTimer.current) clearTimeout(autoRunTimer.current);
     };
-  }, [autoRun, buses, generators, lines, loads, baseMVA, enforceLineLimits, voll, handleRunOPF]);
+  }, [autoRun, buses, generators, lines, loads, baseMVA, enforceLineLimits, voll, removeIsolated, handleRunOPF]);
 
   const handleImportMATPOWER = async () => {
     if (!matpowerText.trim()) {
@@ -142,6 +145,35 @@ export default function HomePage() {
     } catch (err) {
       setImportError(err instanceof Error ? err.message : 'Failed to parse MATPOWER case');
     }
+  };
+
+  const handleImportJSON = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const data = JSON.parse(event.target?.result as string);
+        if (data.buses && Array.isArray(data.buses)) {
+          setSystem({
+            buses: data.buses || [],
+            generators: data.generators || [],
+            lines: data.lines || [],
+            loads: data.loads || [],
+            base_mva: data.base_mva || 100,
+          });
+          setImportSuccess(true);
+          setImportError(null);
+          setView('editor');
+        } else {
+          setImportError('Invalid JSON structure. Missing buses array.');
+        }
+      } catch (err) {
+        setImportError('Failed to parse JSON file.');
+      }
+    };
+    reader.readAsText(file);
   };
 
   const handleLoadMatpowerExample = async () => {
@@ -204,6 +236,44 @@ export default function HomePage() {
     }
   };
 
+  const handleSaveNetworkJSON = () => {
+    const data = {
+      buses,
+      generators,
+      lines,
+      loads,
+      base_mva: baseMVA
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    downloadBlob(blob, 'network_case.json');
+  };
+
+  const handleSaveToServer = async () => {
+    const defaultName = selectedServerCase ? selectedServerCase.replace(/\.(json|m)$/, '') : 'my_network';
+    const filename = window.prompt("Enter filename to save to server:", defaultName);
+    if (!filename) return;
+
+    try {
+      setIsSolving(true);
+      setError(null);
+      const system = {
+        buses,
+        generators,
+        lines,
+        loads,
+        base_mva: baseMVA
+      };
+      await saveServerCase(filename, system);
+      setSelectedServerCase(filename.endsWith('.json') ? filename : filename + '.json');
+      await fetchServerCases();
+      alert(`Successfully saved to server as ${filename}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save case to server');
+    } finally {
+      setIsSolving(false);
+    }
+  };
+
   return (
     <div className="app">
       <header className="header">
@@ -249,10 +319,32 @@ export default function HomePage() {
             <button
               className={`tool-btn ${view === 'server-cases' ? 'active' : ''}`}
               onClick={() => setView('server-cases')}
-              title="Load Server Case"
+              title="Browse Server Case Library"
             >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M3 15v4c0 1.1.9 2 2 2h14a2 2 0 0 0 2-2v-4M17 9l-5 5-5-5M12 12.8V2.5" />
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              </svg>
+            </button>
+            <button
+              className="tool-btn"
+              onClick={handleSaveNetworkJSON}
+              title="Download JSON (Save to Laptop)"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+            </button>
+            <button
+              className="tool-btn"
+              onClick={handleSaveToServer}
+              title="Save to Server Cloud"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+                <polyline points="17 21 17 13 7 13 7 21" />
+                <polyline points="7 3 7 8 15 8" />
               </svg>
             </button>
           </div>
@@ -275,66 +367,100 @@ export default function HomePage() {
           {view === 'editor' ? (
             <NetworkCanvas />
           ) : view === 'import' ? (
-            <div style={{ padding: '2rem' }}>
-              <h2 style={{ marginBottom: '1rem' }}>Import MATPOWER Case</h2>
-              <p style={{ marginBottom: '1rem', color: '#666' }}>
-                Paste your MATPOWER format case file below to import the power system.
-              </p>
-              <textarea
-                className="matpower-input"
-                value={matpowerText}
-                onChange={(e) => setMatpowerText(e.target.value)}
-                placeholder="Paste MATPOWER case file here..."
-              />
-              <div className="btn-group">
-                <button className="btn btn-secondary" onClick={handleLoadMatpowerExample}>
-                  Load Example
-                </button>
-                <button className="btn btn-primary" onClick={handleImportMATPOWER}>
-                  Import Case
-                </button>
+            <div style={{ padding: '6rem 2rem 2rem 2rem', display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', overflowY: 'auto' }}>
+              <div style={{ width: '100%', maxWidth: '1000px', display: 'grid', gridTemplateColumns: 'minmax(300px, 1fr) minmax(300px, 1fr)', gap: '2rem' }}>
+                {/* JSON IMPORT */}
+                <div className="panel" style={{ padding: '2rem', display: 'flex', flexDirection: 'column' }}>
+                  <h2 style={{ marginBottom: '1.25rem', fontSize: '1.3rem', color: 'var(--accent-hover)' }}>Import Saved Case (JSON)</h2>
+                  <p style={{ marginBottom: '1.5rem', color: 'var(--text-secondary)', fontSize: '0.95rem', flex: 1 }}>
+                    Upload a previously saved `.json` network file. This will restore the entire system state including bus positions and service status.
+                  </p>
+                  <label className="btn btn-primary" style={{ display: 'inline-block', cursor: 'pointer', textAlign: 'center', padding: '0.75rem' }}>
+                    Upload JSON
+                    <input
+                      type="file"
+                      accept=".json"
+                      style={{ display: 'none' }}
+                      onChange={handleImportJSON}
+                    />
+                  </label>
+                </div>
+
+                {/* MATPOWER IMPORT */}
+                <div className="panel" style={{ padding: '2rem', display: 'flex', flexDirection: 'column' }}>
+                  <h2 style={{ marginBottom: '1.25rem', fontSize: '1.3rem', color: 'var(--accent-hover)' }}>Import MATPOWER</h2>
+                  <p style={{ marginBottom: '1.25rem', color: 'var(--text-secondary)', fontSize: '0.95rem' }}>
+                    Paste your MATPOWER format case data to import technical parameters.
+                  </p>
+                  <textarea
+                    className="matpower-input"
+                    value={matpowerText}
+                    onChange={(e) => setMatpowerText(e.target.value)}
+                    placeholder="Paste MATPOWER case file here..."
+                    style={{ height: '200px', marginBottom: '1.25rem', fontSize: '0.85rem' }}
+                  />
+                  <div className="btn-group" style={{ marginTop: 'auto' }}>
+                    <button className="btn btn-secondary" onClick={handleLoadMatpowerExample} style={{ flex: 1 }}>
+                      Load Example
+                    </button>
+                    <button className="btn btn-primary" onClick={handleImportMATPOWER} style={{ flex: 1 }}>
+                      Import MATPOWER
+                    </button>
+                  </div>
+                </div>
               </div>
-              {importError && <div className="error-message">{importError}</div>}
-              {importSuccess && <div className="success-message">Case imported successfully!</div>}
+
+              {importError && (
+                <div className="error-message" style={{ marginTop: '2rem', maxWidth: '1000px', width: '100%' }}>
+                  {importError}
+                </div>
+              )}
+              {importSuccess && (
+                <div className="success-message" style={{ marginTop: '2rem', maxWidth: '1000px', width: '100%' }}>
+                  Case imported successfully!
+                </div>
+              )}
             </div>
           ) : (
-            <div style={{ padding: '2rem' }}>
-              <h2 style={{ marginBottom: '1rem' }}>Load Server Case</h2>
-              <p style={{ marginBottom: '1rem', color: '#666' }}>
-                Select a case file from the server to load.
-              </p>
+            <div style={{ padding: '6rem 2rem 2rem 2rem', display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', overflowY: 'auto' }}>
+              <div className="panel" style={{ width: '100%', maxWidth: '800px', padding: '2rem' }}>
+                <h2 style={{ marginBottom: '1.25rem', fontSize: '1.3rem', color: 'var(--accent-hover)' }}>Load Server Case</h2>
+                <p style={{ marginBottom: '1.5rem', color: 'var(--text-secondary)', fontSize: '0.95rem' }}>
+                  Select a case file from the server library to load into the simulator.
+                </p>
 
-              <div className="element-list" style={{ maxHeight: '400px', overflowY: 'auto', marginBottom: '1rem', border: '1px solid #e5e7eb', borderRadius: '6px' }}>
-                {serverCases.length === 0 ? (
-                  <div style={{ padding: '1rem', textAlign: 'center', color: '#888' }}>
-                    No cases found on server.
-                  </div>
-                ) : (
-                  serverCases.map((file) => (
-                    <div
-                      key={file}
-                      className={`element-item ${selectedServerCase === file ? 'selected' : ''}`}
-                      onClick={() => setSelectedServerCase(file)}
-                      style={{ padding: '0.75rem 1rem', display: 'flex', alignItems: 'center' }}
-                    >
-                      <span style={{ marginRight: '0.5rem' }}>
-                        {file.endsWith('.m') ? '📄' : '📋'}
-                      </span>
-                      {file}
+                <div className="element-list" style={{ maxHeight: '400px', overflowY: 'auto', marginBottom: '1.5rem', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--bg-elevated)' }}>
+                  {serverCases.length === 0 ? (
+                    <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                      No cases found on server.
                     </div>
-                  ))
-                )}
-              </div>
+                  ) : (
+                    serverCases.map((file) => (
+                      <div
+                        key={file}
+                        className={`element-item ${selectedServerCase === file ? 'selected' : ''}`}
+                        onClick={() => setSelectedServerCase(file)}
+                        style={{ padding: '0.85rem 1.25rem', borderBottom: '1px solid var(--border)' }}
+                      >
+                        <span style={{ marginRight: '0.75rem' }}>
+                          {file.endsWith('.m') ? '📄' : '�'}
+                        </span>
+                        {file}
+                      </div>
+                    ))
+                  )}
+                </div>
 
-              <div className="btn-group">
-                <button
-                  className="btn btn-primary"
-                  onClick={handleLoadServerCase}
-                  disabled={!selectedServerCase}
-                  style={{ opacity: !selectedServerCase ? 0.5 : 1 }}
-                >
-                  Load Selected Case
-                </button>
+                <div className="btn-group">
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleLoadServerCase}
+                    disabled={!selectedServerCase}
+                    style={{ flex: 1, padding: '0.75rem' }}
+                  >
+                    Load Selected Case
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -414,6 +540,15 @@ export default function HomePage() {
                 />
                 Enforce line limits
               </label>
+              <label style={{ display: 'flex', alignItems: 'center', marginBottom: '0.5rem', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={removeIsolated}
+                  onChange={(e) => setRemoveIsolated(e.target.checked)}
+                  style={{ marginRight: '0.5rem' }}
+                />
+                Remove isolated islands
+              </label>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <label style={{ fontSize: '0.85rem' }}>VOLL ($/MWh):</label>
                 <input
@@ -446,7 +581,7 @@ export default function HomePage() {
           {selectedBus !== null ? (
             <BusEditor busId={selectedBus} />
           ) : selectedGenerator !== null ? (
-            <GeneratorEditor bus={selectedGenerator} />
+            <GeneratorEditor genId={selectedGenerator} />
           ) : selectedLine !== null ? (
             <LineEditor lineIndex={selectedLine} />
           ) : (
@@ -486,9 +621,9 @@ export default function HomePage() {
                     const label = bus?.name || `Bus ${gen.bus}`;
                     return (
                       <div
-                        key={gen.bus}
-                        className={`element-item ${selectedGenerator === gen.bus ? 'selected' : ''}`}
-                        onClick={() => usePowerSystemStore.getState().setSelectedGenerator(gen.bus)}
+                        key={gen.id}
+                        className={`element-item ${selectedGenerator === gen.id ? 'selected' : ''}`}
+                        onClick={() => usePowerSystemStore.getState().setSelectedGenerator(gen.id || null)}
                       >
                         <span className="element-id">Gen @ {label}</span>
                         <span style={{ fontSize: '0.8rem', color: '#8891a8' }}>
@@ -556,7 +691,7 @@ export default function HomePage() {
             </div>
           )}
         </div>
-      </main>
-    </div>
+      </main >
+    </div >
   );
 }

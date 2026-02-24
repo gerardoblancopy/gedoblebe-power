@@ -41,6 +41,28 @@ export default function LineEditor({ lineIndex }: LineEditorProps) {
         </button>
       </div>
 
+      <div className="form-group" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: '8px' }}>
+        <div>
+          <label className="form-label" style={{ marginBottom: 2 }}>In Service</label>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+            {localLine?.status !== 0 ? 'Closed (Connected)' : 'Open (Disconnected)'}
+          </span>
+        </div>
+        <label className="switch">
+          <input
+            type="checkbox"
+            className="toggle-input"
+            checked={localLine?.status !== 0}
+            onChange={(e) => {
+              const newStatus = e.target.checked ? 1 : 0;
+              setLocalLine({ ...localLine!, status: newStatus });
+              updateLine(lineIndex, { ...localLine!, status: newStatus });
+            }}
+          />
+          <span className="slider round"></span>
+        </label>
+      </div>
+
       <div className="form-row">
         <div className="form-group">
           <label className="form-label">From Bus</label>

@@ -10,6 +10,8 @@ export interface Bus {
   type: number;
   v_mag: number;
   v_ang: number;
+  g_shunt?: number;
+  b_shunt?: number;
   base_kv: number;
   zone: number;
   pd?: number;
@@ -17,6 +19,7 @@ export interface Bus {
 }
 
 export interface Generator {
+  id?: string;
   bus: number;
   pg: number;
   qg: number;
@@ -27,6 +30,8 @@ export interface Generator {
   qmax: number;
   qmin: number;
   cost: number[];
+  status?: number;
+  name?: string;
 }
 
 export interface Line {
@@ -38,6 +43,7 @@ export interface Line {
   rate_a: number;
   rate_b?: number;
   rate_c?: number;
+  status?: number;
 }
 
 export interface Load {
@@ -57,6 +63,7 @@ export interface PowerSystem {
 export interface CaseData extends PowerSystem { }
 
 export interface GeneratorResult {
+  id?: string;
   bus: number;
   pg: number;
   qg: number;
@@ -119,17 +126,19 @@ export async function getCase(): Promise<CaseData> {
   return response.json();
 }
 
-export async function runOPF(system?: PowerSystem, enforceLineLimits: boolean = true, voll: number = 10000): Promise<OPFResult> {
+export async function runOPF(system?: PowerSystem, enforceLineLimits: boolean = true, voll: number = 10000, removeIsolated: boolean = false): Promise<OPFResult> {
   const response = await fetch(`${API_BASE_URL}/opf`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: system ? JSON.stringify({
       case_data: system,
       enforce_line_limits: enforceLineLimits,
-      voll: voll
+      voll: voll,
+      remove_isolated: removeIsolated
     }) : JSON.stringify({
       enforce_line_limits: enforceLineLimits,
-      voll: voll
+      voll: voll,
+      remove_isolated: removeIsolated
     }),
   });
   if (!response.ok) throw new Error('Failed to run OPF');
@@ -166,15 +175,23 @@ export async function exportJSON(): Promise<Blob> {
   return response.blob();
 }
 
-export function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
+export function triggerExport(format: 'csv' | 'json') {
+  const url = `${API_BASE_URL}/export/${format}`;
+  // Using target='_blank' helps Chrome handle the download as a navigation event
+  // without replacing the current page context, often bypassing strict click checks.
+
   const a = document.createElement('a');
+  a.style.display = 'none';
   a.href = url;
-  a.download = filename;
+  a.target = '_blank';
+
   document.body.appendChild(a);
   a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+
+  // Increase timeout to 2s to ensure browser registers the action
+  setTimeout(() => {
+    document.body.removeChild(a);
+  }, 2000);
 }
 export async function getAvailableCases(): Promise<string[]> {
   const response = await fetch(`${API_BASE_URL}/cases`);
@@ -188,4 +205,32 @@ export async function loadServerCase(filename: string): Promise<CaseData> {
   });
   if (!response.ok) throw new Error('Failed to load case');
   return response.json();
+}
+
+export async function saveServerCase(filename: string, system: PowerSystem): Promise<{ status: string, message: string, filename: string }> {
+  const response = await fetch(`${API_BASE_URL}/cases/${filename}/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(system),
+  });
+  if (!response.ok) throw new Error('Failed to save case to server');
+  return response.json();
+}
+
+export function downloadBlob(blob: Blob, filename: string) {
+  // Create object URL
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.style.display = 'none';
+  a.href = url;
+  a.setAttribute('download', filename);
+
+  document.body.appendChild(a);
+  a.click();
+
+  // Delay cleanup to ensure download starts
+  setTimeout(() => {
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+  }, 100);
 }

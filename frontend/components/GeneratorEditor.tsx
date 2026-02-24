@@ -2,17 +2,17 @@
 
 import { useState, useEffect } from 'react';
 import { usePowerSystemStore } from '@/lib/store';
+import { Generator } from '@/lib/api';
 
 interface GeneratorEditorProps {
-  bus: number;
+  genId: string;
 }
 
-export default function GeneratorEditor({ bus }: GeneratorEditorProps) {
+export default function GeneratorEditor({ genId }: GeneratorEditorProps) {
   const { buses, generators, updateGenerator, removeGenerator, setSelectedGenerator } = usePowerSystemStore();
-  const busData = buses.find(b => b.id === bus);
-  const busLabel = busData?.name || `Bus ${bus}`;
-
-  const generator = generators.find((g) => g.bus === bus);
+  const generator = generators.find((g) => g.id === genId);
+  const busData = buses.find(b => b.id === generator?.bus);
+  const busLabel = busData?.name || `Bus ${generator?.bus}`;
   const [localGen, setLocalGen] = useState(generator);
 
   useEffect(() => {
@@ -21,22 +21,55 @@ export default function GeneratorEditor({ bus }: GeneratorEditorProps) {
 
   if (!generator) return null;
 
-  const handleUpdate = () => {
-    if (localGen) {
-      updateGenerator(bus, localGen);
+  const handleUpdate = (updates: Partial<Generator>) => {
+    if (generator) {
+      updateGenerator(genId, updates);
     }
   };
 
   return (
     <div className="panel">
       <div className="panel-header">
-        <span className="panel-title">Generator @ {busLabel}</span>
+        <span className="panel-title">Edit Generator {generator.name ? ` — ${generator.name}` : `(Bus ${generator.bus})`}</span>
         <button className="icon-btn" onClick={() => setSelectedGenerator(null)}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <line x1="18" y1="6" x2="6" y2="18"></line>
             <line x1="6" y1="6" x2="18" y2="18"></line>
           </svg>
         </button>
+      </div>
+
+      <div className="form-group">
+        <label className="form-label">Generator Name</label>
+        <input
+          type="text"
+          className="form-input"
+          placeholder="e.g. Unit 1"
+          value={generator.name || ''}
+          onChange={(e) => updateGenerator(genId, { name: e.target.value })}
+        />
+      </div>
+
+      <div className="form-group" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: '8px' }}>
+        <div>
+          <label className="form-label" style={{ marginBottom: 2 }}>In Service</label>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+            {localGen?.status !== 0 ? 'Connected to grid' : 'Disconnected'}
+          </span>
+        </div>
+        <label className="switch">
+          <input
+            type="checkbox"
+            className="toggle-input"
+            checked={localGen?.status !== 0}
+            onChange={(e) => {
+              const newStatus = e.target.checked ? 1 : 0;
+              setLocalGen({ ...localGen!, status: newStatus });
+              handleUpdate({ status: newStatus });
+            }}
+          />
+          <span className="slider round"></span>
+        </label>
       </div>
 
       <div className="form-group">
@@ -53,7 +86,7 @@ export default function GeneratorEditor({ bus }: GeneratorEditorProps) {
                 const newCost = [...(localGen?.cost || [0, 25, 0])];
                 newCost[0] = Number(e.target.value);
                 setLocalGen({ ...localGen!, cost: newCost });
-                handleUpdate();
+                handleUpdate({ cost: newCost });
               }}
             />
           </div>
@@ -68,7 +101,7 @@ export default function GeneratorEditor({ bus }: GeneratorEditorProps) {
                 const newCost = [...(localGen?.cost || [0, 25, 0])];
                 newCost[1] = Number(e.target.value);
                 setLocalGen({ ...localGen!, cost: newCost });
-                handleUpdate();
+                handleUpdate({ cost: newCost });
               }}
             />
           </div>
@@ -83,7 +116,7 @@ export default function GeneratorEditor({ bus }: GeneratorEditorProps) {
                 const newCost = [...(localGen?.cost || [0, 25, 0])];
                 newCost[2] = Number(e.target.value);
                 setLocalGen({ ...localGen!, cost: newCost });
-                handleUpdate();
+                handleUpdate({ cost: newCost });
               }}
             />
           </div>
@@ -98,8 +131,9 @@ export default function GeneratorEditor({ bus }: GeneratorEditorProps) {
             className="form-input"
             value={localGen?.pmin ?? 0}
             onChange={(e) => {
-              setLocalGen({ ...localGen!, pmin: Number(e.target.value) });
-              handleUpdate();
+              const pmin = Number(e.target.value);
+              setLocalGen({ ...localGen!, pmin });
+              handleUpdate({ pmin });
             }}
           />
         </div>
@@ -110,8 +144,9 @@ export default function GeneratorEditor({ bus }: GeneratorEditorProps) {
             className="form-input"
             value={localGen?.pmax ?? 250}
             onChange={(e) => {
-              setLocalGen({ ...localGen!, pmax: Number(e.target.value) });
-              handleUpdate();
+              const pmax = Number(e.target.value);
+              setLocalGen({ ...localGen!, pmax });
+              handleUpdate({ pmax });
             }}
           />
         </div>
@@ -125,8 +160,9 @@ export default function GeneratorEditor({ bus }: GeneratorEditorProps) {
             className="form-input"
             value={localGen?.qmin ?? -300}
             onChange={(e) => {
-              setLocalGen({ ...localGen!, qmin: Number(e.target.value) });
-              handleUpdate();
+              const qmin = Number(e.target.value);
+              setLocalGen({ ...localGen!, qmin });
+              handleUpdate({ qmin });
             }}
           />
         </div>
@@ -137,8 +173,9 @@ export default function GeneratorEditor({ bus }: GeneratorEditorProps) {
             className="form-input"
             value={localGen?.qmax ?? 300}
             onChange={(e) => {
-              setLocalGen({ ...localGen!, qmax: Number(e.target.value) });
-              handleUpdate();
+              const qmax = Number(e.target.value);
+              setLocalGen({ ...localGen!, qmax });
+              handleUpdate({ qmax });
             }}
           />
         </div>
@@ -152,8 +189,9 @@ export default function GeneratorEditor({ bus }: GeneratorEditorProps) {
           value={localGen?.vg || 1.0}
           step="0.01"
           onChange={(e) => {
-            setLocalGen({ ...localGen!, vg: Number(e.target.value) });
-            handleUpdate();
+            const vg = Number(e.target.value);
+            setLocalGen({ ...localGen!, vg });
+            handleUpdate({ vg });
           }}
         />
       </div>
@@ -162,7 +200,7 @@ export default function GeneratorEditor({ bus }: GeneratorEditorProps) {
         <button
           className="btn btn-danger"
           onClick={() => {
-            removeGenerator(bus);
+            removeGenerator(genId);
             setSelectedGenerator(null);
           }}
         >

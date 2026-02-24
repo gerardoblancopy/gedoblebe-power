@@ -66,13 +66,14 @@ class MatpowerParser:
 
         # Find bus matrix
         bus_match = re.search(
-            r'(?:mpc\.)?bus\s*=\s*\[(.*?)\];',
+            r'(?:mpc\.)?bus\s*=\s*\[(.*?)\]\s*;?',
             text,
-            re.DOTALL
+            re.DOTALL | re.IGNORECASE
         )
 
         if not bus_match:
-            return buses
+            logger.warning("No bus matrix found in MATPOWER text")
+            return buses, loads
 
         bus_text = bus_match.group(1)
         rows = self._parse_matrix_rows(bus_text)
@@ -112,9 +113,9 @@ class MatpowerParser:
 
         # Find generator matrix
         gen_match = re.search(
-            r'(?:mpc\.)?gen\s*=\s*\[(.*?)\];',
+            r'(?:mpc\.)?gen\s*=\s*\[(.*?)\]\s*;?',
             text,
-            re.DOTALL
+            re.DOTALL | re.IGNORECASE
         )
 
         if not gen_match:
@@ -123,7 +124,7 @@ class MatpowerParser:
         gen_text = gen_match.group(1)
         rows = self._parse_matrix_rows(gen_text)
 
-        for row in rows:
+        for idx, row in enumerate(rows):
             if len(row) >= 2:
                 bus = int(row[0])
                 pg = float(row[1]) if row[1] else 0.0
@@ -135,7 +136,14 @@ class MatpowerParser:
                 pmax = float(row[8]) if len(row) > 8 and row[8] else 250.0
                 pmin = float(row[9]) if len(row) > 9 and row[9] else 0.0
 
+                status = int(float(row[7])) if len(row) > 7 and row[7] else 1
+
+                # Generate unique ID: G-{bus}-{sequence_count_at_bus}
+                bus_gen_count = len([g for g in generators if g.bus == bus])
+                gen_id = f"G-{bus}-{bus_gen_count + 1}"
+
                 generators.append(Generator(
+                    id=gen_id,
                     bus=bus,
                     pg=pg,
                     qg=qg,
@@ -145,6 +153,7 @@ class MatpowerParser:
                     pmin=pmin,
                     qmax=qmax,
                     qmin=qmin,
+                    status=status,
                     cost=[0, 25, 0]  # Default cost, will be overridden by gencost
                 ))
 
@@ -171,9 +180,9 @@ class MatpowerParser:
 
         # Find gencost matrix
         cost_match = re.search(
-            r'(?:mpc\.)?gencost\s*=\s*\[(.*?)\];',
+            r'(?:mpc\.)?gencost\s*=\s*\[(.*?)\]\s*;?',
             text,
-            re.DOTALL
+            re.DOTALL | re.IGNORECASE
         )
 
         if not cost_match:
@@ -208,9 +217,9 @@ class MatpowerParser:
 
         # Find branch matrix
         branch_match = re.search(
-            r'(?:mpc\.)?branch\s*=\s*\[(.*?)\];',
+            r'(?:mpc\.)?branch\s*=\s*\[(.*?)\]\s*;?',
             text,
-            re.DOTALL
+            re.DOTALL | re.IGNORECASE
         )
 
         if not branch_match:
@@ -228,13 +237,16 @@ class MatpowerParser:
                 b = float(row[4]) if len(row) > 4 and row[4] else 0.0
                 rate_a = float(row[5]) if len(row) > 5 and row[5] else 250.0
 
+                status = int(float(row[10])) if len(row) > 10 and row[10] else 1
+
                 lines.append(Line(
                     from_bus=from_bus,
                     to_bus=to_bus,
                     r=r,
                     x=x,
                     b=b,
-                    rate_a=rate_a
+                    rate_a=rate_a,
+                    status=status
                 ))
 
         return lines
@@ -244,21 +256,22 @@ class MatpowerParser:
     def _parse_matrix_rows(self, text: str) -> List[List[str]]:
         """Parse matrix rows from MATPOWER text"""
         rows = []
-        # Remove extra whitespace and split by semicolons
-        text = re.sub(r'\s+', ' ', text)
-        text = text.strip()
+        
+        # Split by semicolons OR newlines
+        # This handles both [ 1 2 ; 3 4 ] and [ 1 2 \n 3 4 ]
+        raw_rows = re.split(r'[;\n]', text)
 
-        # Split by semicolons (row separators in MATLAB)
-        row_strs = text.split(';')
-
-        for row_str in row_strs:
+        for row_str in raw_rows:
             row_str = row_str.strip()
-            if row_str:
-                # Split by spaces
-                values = row_str.split()
-                # Filter out empty strings
-                values = [v for v in values if v]
-                if values:
-                    rows.append(values)
+            if not row_str:
+                continue
+                
+            # Split by whitespace (spaces or tabs)
+            values = row_str.split()
+            # Filter out empty strings
+            values = [v for v in values if v]
+            if values:
+                rows.append(values)
 
         return rows
+

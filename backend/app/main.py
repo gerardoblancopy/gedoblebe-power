@@ -133,7 +133,8 @@ async def run_opf(request: OPFRequest):
         opf_result = solver.solve(
             current_case,
             voll=request.voll,
-            enforce_line_limits=request.enforce_line_limits
+            enforce_line_limits=request.enforce_line_limits,
+            remove_isolated=request.remove_isolated
         )
 
         logger.info(f"OPF solved successfully. Total cost: {opf_result.total_cost}")
@@ -364,4 +365,30 @@ async def load_server_case(filename: str):
     except Exception as e:
         logger.error(f"Error loading case {filename}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/cases/{filename}/save")
+async def save_server_case(filename: str, case_data: CaseData):
+    """
+    Save the current case state to the server
+    """
+    # Secure filename to prevent directory traversal
+    filename = os.path.basename(filename)
+    if not filename.endswith('.json'):
+        filename += '.json'
+    
+    file_path = os.path.join(CASES_DIR, filename)
+    
+    try:
+        # Create directory if it doesn't exist
+        os.makedirs(CASES_DIR, exist_ok=True)
+        
+        with open(file_path, 'w') as f:
+            f.write(case_data.model_dump_json(indent=2))
+            
+        logger.info(f"Saved server case {filename}")
+        return {"status": "success", "message": f"Case {filename} saved successfully", "filename": filename}
+    except Exception as e:
+        logger.error(f"Error saving case {filename}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 

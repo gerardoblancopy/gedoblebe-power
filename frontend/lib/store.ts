@@ -19,7 +19,7 @@ interface PowerSystemState {
 
   // UI state
   selectedBus: number | null;
-  selectedGenerator: number | null;
+  selectedGenerator: string | null;
   selectedLine: number | null;
   isSolving: boolean;
   error: string | null;
@@ -30,8 +30,8 @@ interface PowerSystemState {
   updateBus: (id: number, updates: Partial<Bus>) => void;
   removeBus: (id: number) => void;
   addGenerator: (gen: Generator) => void;
-  updateGenerator: (bus: number, updates: Partial<Generator>) => void;
-  removeGenerator: (bus: number) => void;
+  updateGenerator: (id: string, updates: Partial<Generator>) => void;
+  removeGenerator: (id: string) => void;
   addLine: (line: Line) => void;
   updateLine: (index: number, updates: Partial<Line>) => void;
   removeLine: (index: number) => void;
@@ -40,7 +40,7 @@ interface PowerSystemState {
   removeLoad: (bus: number) => void;
   setResults: (results: OPFResult | null) => void;
   setSelectedBus: (id: number | null) => void;
-  setSelectedGenerator: (bus: number | null) => void;
+  setSelectedGenerator: (id: string | null) => void;
   setSelectedLine: (index: number | null) => void;
   setIsSolving: (solving: boolean) => void;
   setError: (error: string | null) => void;
@@ -64,15 +64,22 @@ export const usePowerSystemStore = create<PowerSystemState>()(
       error: null,
 
       // Actions
-      setSystem: (system) => set({
-        buses: system.buses || [],
-        generators: system.generators || [],
-        lines: system.lines || [],
-        loads: system.loads || [],
-        baseMVA: system.base_mva || 100,
-        results: null,
-        error: null,
-      }),
+      setSystem: (system) => {
+        // Ensure all generators have IDs
+        const generatorsWithIds = (system.generators || []).map((g, i) => ({
+          ...g,
+          id: g.id || `G-${g.bus}-${i + 1}`
+        }));
+        set({
+          buses: system.buses || [],
+          generators: generatorsWithIds,
+          lines: system.lines || [],
+          loads: system.loads || [],
+          baseMVA: system.base_mva || 100,
+          results: null,
+          error: null,
+        });
+      },
 
       addBus: (bus) => set((state) => ({
         buses: [...state.buses, bus],
@@ -89,18 +96,25 @@ export const usePowerSystemStore = create<PowerSystemState>()(
         generators: state.generators.filter((g) => g.bus !== id),
       })),
 
-      addGenerator: (gen) => set((state) => ({
-        generators: [...state.generators, gen],
-      })),
+      addGenerator: (gen) => set((state) => {
+        const busGenCount = state.generators.filter(g => g.bus === gen.bus).length;
+        const newGen = {
+          ...gen,
+          id: gen.id || `G-${gen.bus}-${busGenCount + 1}`
+        };
+        return {
+          generators: [...state.generators, newGen],
+        };
+      }),
 
-      updateGenerator: (bus, updates) => set((state) => ({
+      updateGenerator: (id, updates) => set((state) => ({
         generators: state.generators.map((g) =>
-          g.bus === bus ? { ...g, ...updates } : g
+          g.id === id ? { ...g, ...updates, status: updates.status !== undefined ? (updates.status ? 1 : 0) : g.status } : g
         ),
       })),
 
-      removeGenerator: (bus) => set((state) => ({
-        generators: state.generators.filter((g) => g.bus !== bus),
+      removeGenerator: (id) => set((state) => ({
+        generators: state.generators.filter((g) => g.id !== id),
       })),
 
       addLine: (line) => set((state) => ({
@@ -108,7 +122,7 @@ export const usePowerSystemStore = create<PowerSystemState>()(
       })),
 
       updateLine: (index, updates) => set((state) => ({
-        lines: state.lines.map((l, i) => i === index ? { ...l, ...updates } : l),
+        lines: state.lines.map((l, i) => i === index ? { ...l, ...updates, status: updates.status !== undefined ? (updates.status ? 1 : 0) : l.status } : l),
       })),
 
       removeLine: (index) => set((state) => ({
@@ -134,7 +148,7 @@ export const usePowerSystemStore = create<PowerSystemState>()(
       setResults: (results) => set({ results }),
 
       setSelectedBus: (id) => set({ selectedBus: id, selectedGenerator: null, selectedLine: null }),
-      setSelectedGenerator: (bus) => set({ selectedGenerator: bus, selectedBus: null, selectedLine: null }),
+      setSelectedGenerator: (id) => set({ selectedGenerator: id, selectedBus: null, selectedLine: null }),
       setSelectedLine: (index) => set({ selectedLine: index, selectedBus: null, selectedGenerator: null }),
 
       setIsSolving: (solving) => set({ isSolving: solving }),

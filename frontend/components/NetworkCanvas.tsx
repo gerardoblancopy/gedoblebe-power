@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { usePowerSystemStore } from '@/lib/store';
+import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, forceX, forceY } from 'd3-force';
 
 interface Point {
   x: number;
@@ -22,7 +23,7 @@ function segmentsIntersect(a: Point, b: Point, c: Point, d: Point): boolean {
 }
 export default function NetworkCanvas() {
   const canvasRef = useRef<SVGSVGElement>(null);
-  const [dimensions, setDimensions] = useState({ width: 800, height: 500 });
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [busPositions, setBusPositions] = useState<Record<number, Point>>({});
   const [dragging, setDragging] = useState<number | null>(null);
   const [mode, setMode] = useState<'select' | 'add-bus' | 'add-line'>('select');
@@ -41,155 +42,124 @@ export default function NetworkCanvas() {
     loads,
     addBus,
     addLine,
+    addGenerator,
+    addLoad,
     removeBus,
     removeLine,
     setSelectedBus,
     selectedBus,
+    selectedGenerator,
     results,
   } = usePowerSystemStore();
 
   // Force-directed layout to minimize line crossings
   useEffect(() => {
-    if (buses.length === 0) return;
-
-    const centerX = dimensions.width / 2;
-    const centerY = dimensions.height / 2;
+    if (buses.length === 0 || dimensions.width === 0) return;
 
     // Check if any bus needs a new position
     const needsLayout = buses.some(b => !busPositions[b.id]);
     if (!needsLayout) return;
 
-    const busCount = buses.length;
-    const margin = 40; // Use a comfortable margin for the cascade
-    const width = dimensions.width - 2 * margin;
-    const height = dimensions.height - 2 * margin;
+    const width = dimensions.width;
+    const height = dimensions.height;
 
-    // Sort buses by importance: Slack (3) > PV (2) > PQ (1)
-    const sortedBuses = [...buses].sort((a, b) => {
-      if (a.type !== b.type) return b.type - a.type;
-      return a.id - b.id;
-    });
+    // Create nodes array for D3
+    const nodes = buses.map(b => ({
+      id: b.id,
+      // Retain existing position if available, or initialize near center randomly
+      x: busPositions[b.id]?.x || (width / 2 + (Math.random() - 0.5) * 100),
+      y: busPositions[b.id]?.y || (height / 2 + (Math.random() - 0.5) * 100),
+      busData: b,
+    }));
 
-    // Strategy: Cascade / Grid Disposition
-    // Determine grid dimensions
-    const cols = busCount > 50 ? 10 : busCount > 20 ? 6 : Math.max(2, Math.min(busCount, 4));
-    const rows = Math.ceil(busCount / cols);
-    const colSpacing = width / (cols > 1 ? cols - 1 : 1);
-    const rowSpacing = height / (rows > 1 ? rows - 1 : 1);
+    // Create links array for D3
+    const links = lines
+      .filter(l => nodes.some(n => n.id === l.from_bus) && nodes.some(n => n.id === l.to_bus))
+      .map(l => ({
+        source: l.from_bus,
+        target: l.to_bus,
+      }));
 
-    const pos: Record<number, { x: number; y: number }> = {};
-    const busIds = buses.map(b => b.id);
-
-    sortedBuses.forEach((bus, i) => {
-      if (busPositions[bus.id]) {
-        pos[bus.id] = { ...busPositions[bus.id] };
-      } else {
-        const r = Math.floor(i / cols);
-        const c = i % cols;
-        // Stagger every other row
-        const xOffset = (r % 2 === 1) ? colSpacing / 2 : 0;
-
-        pos[bus.id] = {
-          x: margin + c * colSpacing + xOffset,
-          y: margin + r * rowSpacing,
+    // If only 1 or 2 buses, skip force simulation and hardcode position
+    if (buses.length <= 2) {
+      const newPos: Record<number, Point> = {};
+      nodes.forEach((n, idx) => {
+        newPos[n.id] = {
+          x: width / 2 + (idx * 150 - ((buses.length - 1) * 75)),
+          y: height / 2
         };
-      }
-    });
-
-    // If only 1 or 2 buses, skip force simulation
-    if (busCount <= 2) {
-      setBusPositions(pos);
+      });
+      setBusPositions(newPos);
       return;
     }
 
-    // Build edge list from lines
-    const edges = lines
-      .filter(l => pos[l.from_bus] && pos[l.to_bus])
-      .map(l => ({ from: l.from_bus, to: l.to_bus }));
+    // Set up D3 simulation
+    const isLarge = buses.length > 50;
 
-    // Force-directed simulation parameters
-    const ITERATIONS = 150; // Fewer iterations needed for grid seeding
-    const maxX = dimensions.width - 25;
-    const maxY = dimensions.height - 25;
+    const simulation = forceSimulation(nodes as any)
+      .force(
+        "link",
+        forceLink(links as any)
+          .id((d: any) => d.id)
+          .distance(isLarge ? 120 : 200)
+      )
+      .force("charge", forceManyBody().strength(isLarge ? -1500 : -4000))
+      // Collision detection ensures bus icons and their text labels don't overlap
+      .force(
+        "collide",
+        forceCollide().radius((d: any) => {
+          const bus = d.busData;
+          const label = bus.name || String(bus.id);
+          const pillW = Math.max(isLarge ? 20 : 28, label.length * (isLarge ? 6 : 8) + 8);
+          // High padding needed to account for vertically stacked labels (LMP, Voltage, Gen/Load)
+          return pillW / 2 + 70;
+        }).iterations(5)
+      )
+      .force("x", forceX(width / 2).strength(0.05))
+      .force("y", forceY(height / 2).strength(0.05));
 
-    // Adaptive ideal length: smaller for grid-like layouts
-    const idealLen = Math.min(width / cols, height / rows) * 1.5;
-
-    for (let iter = 0; iter < ITERATIONS; iter++) {
-      const t = 1 - iter / ITERATIONS;
-      const step = Math.max(1, 25 * t);
-      const forces: Record<number, { fx: number; fy: number }> = {};
-      busIds.forEach(id => { forces[id] = { fx: 0, fy: 0 }; });
-
-      // Repulsive forces
-      for (let i = 0; i < busIds.length; i++) {
-        for (let j = i + 1; j < busIds.length; j++) {
-          const a = busIds[i], b = busIds[j];
-          let dx = pos[a].x - pos[b].x;
-          let dy = pos[a].y - pos[b].y;
-          const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
-          const k = busCount > 50 ? 2.0 : 1.2;
-          const repulse = (idealLen * idealLen * k) / dist;
-          forces[a].fx += (dx / dist) * repulse;
-          forces[a].fy += (dy / dist) * repulse;
-          forces[b].fx -= (dx / dist) * repulse;
-          forces[b].fy -= (dy / dist) * repulse;
-        }
-      }
-
-      // Attractive forces
-      edges.forEach(({ from, to }) => {
-        let dx = pos[to].x - pos[from].x;
-        let dy = pos[to].y - pos[from].y;
-        const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
-        const attract = (dist * dist) / (idealLen * 2.5);
-        forces[from].fx += (dx / dist) * attract;
-        forces[from].fy += (dy / dist) * attract;
-        forces[to].fx -= (dx / dist) * attract;
-        forces[to].fy -= (dy / dist) * attract;
-      });
-
-      // Edge-crossing penalty
-      for (let i = 0; i < edges.length; i++) {
-        for (let j = i + 1; j < edges.length; j++) {
-          const e1 = edges[i], e2 = edges[j];
-          if (e1.from === e2.from || e1.from === e2.to || e1.to === e2.from || e1.to === e2.to) continue;
-          if (segmentsIntersect(pos[e1.from], pos[e1.to], pos[e2.from], pos[e2.to])) {
-            const dx = (pos[e1.from].x + pos[e1.to].x) / 2 - (pos[e2.from].x + pos[e2.to].x) / 2;
-            const dy = (pos[e1.from].y + pos[e1.to].y) / 2 - (pos[e2.from].y + pos[e2.to].y) / 2;
-            const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
-            const penalty = idealLen * 0.4;
-            const fx = (dx / dist) * penalty;
-            const fy = (dy / dist) * penalty;
-            forces[e1.from].fx += fx * 0.5; forces[e1.from].fy += fy * 0.5;
-            forces[e1.to].fx += fx * 0.5; forces[e1.to].fy += fy * 0.5;
-            forces[e2.from].fx -= fx * 0.5; forces[e2.from].fy -= fy * 0.5;
-            forces[e2.to].fx -= fx * 0.5; forces[e2.to].fy -= fy * 0.5;
-          }
-        }
-      }
-
-      // Gravity force toward top-center (cascade effect)
-      busIds.forEach(id => {
-        forces[id].fx += (centerX - pos[id].x) * 0.005;
-        forces[id].fy += (margin - pos[id].y) * 0.002; // Slight gravity toward top
-      });
-
-      // Apply forces
-      busIds.forEach(id => {
-        const f = forces[id];
-        const mag = Math.sqrt(f.fx * f.fx + f.fy * f.fy);
-        if (mag > 0) {
-          const capped = Math.min(mag, step);
-          pos[id].x += (f.fx / mag) * capped;
-          pos[id].y += (f.fy / mag) * capped;
-        }
-        pos[id].x = Math.max(25, Math.min(maxX, pos[id].x));
-        pos[id].y = Math.max(25, Math.min(maxY, pos[id].y));
-      });
+    // Run statically
+    const ticks = Math.ceil(Math.log(simulation.alphaMin()) / Math.log(1 - simulation.alphaDecay()));
+    for (let i = 0; i < ticks; ++i) {
+      simulation.tick();
     }
 
-    setBusPositions(pos);
+    // Auto-fit to canvas perfectly without needing user to zoom
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    nodes.forEach(n => {
+      if (n.x < minX) minX = n.x;
+      if (n.x > maxX) maxX = n.x;
+      if (n.y < minY) minY = n.y;
+      if (n.y > maxY) maxY = n.y;
+    });
+
+    const graphW = Math.max(1, maxX - minX);
+    const graphH = Math.max(1, maxY - minY);
+    const fillMargin = 80; // Margin from edges of canvas
+
+    // Calculate how much we need to scale the graph to fit inside the dimension bounds
+    const scaleX = (width - 2 * fillMargin) / graphW;
+    const scaleY = (height - 2 * fillMargin) / graphH;
+    let finalScale = Math.min(scaleX, scaleY);
+
+    // Limit extreme scaling
+    finalScale = Math.max(0.5, Math.min(finalScale, 1.8));
+
+    // Calculate centering offset
+    const offsetX = width / 2 - ((maxX + minX) / 2) * finalScale;
+    const offsetY = height / 2 - ((maxY + minY) / 2) * finalScale;
+
+    const newPos: Record<number, { x: number; y: number }> = {};
+    nodes.forEach(n => {
+      newPos[n.id] = {
+        x: n.x * finalScale + offsetX,
+        y: n.y * finalScale + offsetY
+      };
+    });
+
+    setBusPositions(newPos);
+    setZoom(1); // Ensure we are at 100% zoom to show high LOD text nodes
+    setPanOffset({ x: 0, y: 0 }); // reset pan
   }, [buses.length, lines.length, dimensions]);
 
   // Resize handler
@@ -315,12 +285,6 @@ export default function NetworkCanvas() {
     );
   };
 
-  // Get generator output for a bus
-  const getGenMW = (busId: number): number | null => {
-    if (!results) return null;
-    const gen = results.generator_results.find((g) => g.bus === busId);
-    return gen ? gen.pg : null;
-  };
 
   // Get load at a bus
   const getLoadMW = (busId: number): number | null => {
@@ -338,9 +302,13 @@ export default function NetworkCanvas() {
   const busCount = buses.length;
   const isLargeNetwork = busCount > 50;
 
-  // LOD thresholds
-  const showDetail = zoom > 0.7 && !isLargeNetwork;
-  const showLabels = zoom > 0.4;
+  // Escalado inverso amortiguado: cuando se hace zoom out (zoom < 1),
+  // el texto disminuye pero mucho más lento (a un ritmo de 1/3).
+  // Matemáticamente, si zoom es 0.3, el texto debería escalar con respecto al canvas
+  // un factor de Math.pow(zoom, -1/3) == 1 / Math.pow(zoom, 1/3). 
+  // Esto hace que visualmente el texto encoja en pantalla, pero preserve la legibilidad 3 veces más tiempo.
+  const textScale = zoom < 1 ? Math.pow(zoom, -1 / 3) : 1 / zoom;
+
   const adaptiveBusRadius = isLargeNetwork ? 12 : 20;
   const adaptiveFontSize = isLargeNetwork ? 10 : 12;
 
@@ -467,16 +435,92 @@ export default function NetworkCanvas() {
                 y1={fromPos.y}
                 x2={toPos.x}
                 y2={toPos.y}
-                stroke={getLineColor(loading)}
-                strokeWidth={getLineWidth(loading)}
-                style={{ cursor: 'pointer' }}
+                stroke={line.status === 0 ? "#64748b" : getLineColor(loading)}
+                strokeWidth={line.status === 0 ? 2 : getLineWidth(loading)}
+                strokeDasharray={line.status === 0 ? "6,4" : "none"}
+                style={{ cursor: 'context-menu' }}
                 onClick={(e) => {
                   e.stopPropagation();
                   usePowerSystemStore.getState().setSelectedLine(idx);
                 }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  usePowerSystemStore.getState().updateLine(idx, { status: line.status === 0 ? 1 : 0 });
+                }}
               />
+              {/* Visual disconnectors (breakers) for non-large networks */}
+              {!isLargeNetwork && (() => {
+                if (lineLen < 30) return null;
+                // Use the pure geometric angle, NOT the arrowhead angle (which flips depending on flow direction)
+                const realDx = toPos.x - fromPos.x;
+                const realDy = toPos.y - fromPos.y;
+                const realLen = Math.sqrt(realDx * realDx + realDy * realDy);
+                const ux = realDx / realLen;
+                const uy = realDy / realLen;
+
+                // Offset carefully between the bus circle (15px) and the arrowhead tip
+                const offset = adaptiveBusRadius + 5;
+                const b1x = fromPos.x + ux * offset;
+                const b1y = fromPos.y + uy * offset;
+                const b2x = toPos.x - ux * offset;
+                const b2y = toPos.y - uy * offset;
+
+                // Real rotation angle for the rects based purely on from->to coordinates
+                const realAngle = Math.atan2(realDy, realDx) * (180 / Math.PI);
+
+                const bSize = 8;
+                const isActive = line.status !== 0;
+                // PowerWorld convention: Red solid for energized (closed), background+Green stroke for open
+                const breakerFill = isActive ? "#ef4444" : "#0f1117";
+                const breakerStroke = isActive ? "#ef4444" : "#10b981";
+
+                return (
+                  <g>
+                    {/* Background wipe so the line doesn't strike directly through the open square */}
+                    {!isActive && (
+                      <>
+                        <rect x={b1x - bSize / 2} y={b1y - bSize / 2} width={bSize} height={bSize} fill="#0f1117" transform={`rotate(${realAngle} ${b1x} ${b1y})`} />
+                        <rect x={b2x - bSize / 2} y={b2y - bSize / 2} width={bSize} height={bSize} fill="#0f1117" transform={`rotate(${realAngle} ${b2x} ${b2y})`} />
+                      </>
+                    )}
+                    <rect
+                      x={b1x - bSize / 2}
+                      y={b1y - bSize / 2}
+                      width={bSize}
+                      height={bSize}
+                      rx="1"
+                      fill={breakerFill}
+                      stroke={breakerStroke}
+                      strokeWidth="1.5"
+                      style={{ cursor: 'pointer', transformOrigin: `${b1x}px ${b1y}px` }}
+                      transform={`rotate(${realAngle})`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        usePowerSystemStore.getState().updateLine(idx, { status: isActive ? 0 : 1 });
+                      }}
+                    />
+                    <rect
+                      x={b2x - bSize / 2}
+                      y={b2y - bSize / 2}
+                      width={bSize}
+                      height={bSize}
+                      rx="1"
+                      fill={breakerFill}
+                      stroke={breakerStroke}
+                      strokeWidth="1.5"
+                      style={{ cursor: 'pointer', transformOrigin: `${b2x}px ${b2y}px` }}
+                      transform={`rotate(${realAngle})`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        usePowerSystemStore.getState().updateLine(idx, { status: isActive ? 0 : 1 });
+                      }}
+                    />
+                  </g>
+                );
+              })()}
               {/* Animated flow overlay (PowerWorld-style moving dots) */}
-              {results && Math.abs(flowMw) > 0.1 && (
+              {results && line.status !== 0 && Math.abs(flowMw) > 0.1 && (
                 <line
                   x1={arrowFrom.x}
                   y1={arrowFrom.y}
@@ -494,7 +538,7 @@ export default function NetworkCanvas() {
                 />
               )}
               {/* Flow direction arrowhead */}
-              {results && Math.abs(flowMw) > 0.1 && lineLen > 50 && (() => {
+              {results && line.status !== 0 && Math.abs(flowMw) > 0.1 && lineLen > 50 && (() => {
                 // Arrow scales with line width (loading)
                 const lineW = getLineWidth(loading);
                 const arrowSize = 6 + lineW * 2.5;  // 11 → 13.5 → 16
@@ -525,31 +569,33 @@ export default function NetworkCanvas() {
                 );
               })()}
               {/* Flow label (rotated to follow line) */}
-              {results && (
+              {results && line.status !== 0 && (
                 <g transform={`translate(${midX}, ${midY})`}>
-                  <g transform={`rotate(${textAngle})`}>
-                    <rect
-                      x={-28}
-                      y={-12}
-                      width={56}
-                      height={18}
-                      fill="rgba(15, 23, 42, 0.9)"
-                      rx={4}
-                      stroke="#475569"
-                      strokeWidth={1}
-                    />
-                    <text
-                      x={0}
-                      y={1}
-                      dy="0.30em"
-                      textAnchor="middle"
-                      fontSize="11"
-                      fill="#fff"
-                      fontWeight="600"
-                      style={{ pointerEvents: 'none' }}
-                    >
-                      {Math.abs(flowMw).toFixed(0)} MW
-                    </text>
+                  <g transform={`scale(${textScale})`}>
+                    <g transform={`rotate(${textAngle})`}>
+                      <rect
+                        x={-28}
+                        y={-12}
+                        width={56}
+                        height={18}
+                        fill="rgba(15, 23, 42, 0.9)"
+                        rx={4}
+                        stroke="#475569"
+                        strokeWidth={1}
+                      />
+                      <text
+                        x={0}
+                        y={1}
+                        dy="0.30em"
+                        textAnchor="middle"
+                        fontSize="11"
+                        fill="#fff"
+                        fontWeight="600"
+                        style={{ pointerEvents: 'none' }}
+                      >
+                        {Math.abs(flowMw).toFixed(0)} MW
+                      </text>
+                    </g>
                   </g>
                 </g>
               )}
@@ -574,9 +620,7 @@ export default function NetworkCanvas() {
         {/* Buses */}
         {buses.map((bus) => {
           const pos = allBusPositions[bus.id] || { x: 0, y: 0 };
-          const hasGen = generators.some((g) => g.bus === bus.id);
           const hasLoad = loads.some((l) => l.bus === bus.id);
-          const genMW = getGenMW(bus.id);
           const loadMW = getLoadMW(bus.id);
           const curtail = getCurtailment(bus.id);
 
@@ -609,70 +653,137 @@ export default function NetworkCanvas() {
                 stroke={selectedBus === bus.id ? '#818cf8' : '#2e3348'}
                 strokeWidth={selectedBus === bus.id ? 3 : 2}
                 style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.2))' }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  addGenerator({
+                    bus: bus.id,
+                    pg: 0,
+                    qg: 0,
+                    vg: 1.0,
+                    mbase: 100,
+                    pmax: 250,
+                    pmin: 0,
+                    qmax: 300,
+                    qmin: -300,
+                    cost: [0, 25, 0],
+                    status: 1
+                  });
+                }}
               />
               {/* Bus label with pill */}
-              {showLabels && (() => {
+              {(() => {
                 const label = bus.name || String(bus.id);
                 const pillW = Math.max(isLargeNetwork ? 20 : 28, label.length * (isLargeNetwork ? 6 : 8) + 8);
                 const pillH = isLargeNetwork ? 14 : 18;
                 return (
-                  <>
-                    <rect x={-pillW / 2} y={-(adaptiveBusRadius + pillH + 4)} width={pillW} height={pillH} rx="4" fill="rgba(36, 40, 56, 0.9)" stroke="#4b5563" strokeWidth="1" />
-                    <text
-                      textAnchor="middle"
-                      y={-(adaptiveBusRadius + pillH / 2 + 3.5)}
-                      dy="0.35em"
-                      fill="#fff"
-                      fontSize={adaptiveFontSize}
-                      fontWeight="bold"
-                      style={{ pointerEvents: 'none' }}
-                    >
-                      {label}
-                    </text>
-                  </>
+                  <g transform={`scale(${textScale})`}>
+                    {/* Reverse margin to keep it docked at the edge of the circle despite scaling */}
+                    <g transform={`translate(0, ${-(adaptiveBusRadius / textScale) - pillH - 4})`}>
+                      <rect x={-pillW / 2} y={0} width={pillW} height={pillH} rx="4" fill="rgba(36, 40, 56, 0.9)" stroke="#4b5563" strokeWidth="1" />
+                      <text
+                        textAnchor="middle"
+                        y={pillH / 2}
+                        dy="0.35em"
+                        fill="#fff"
+                        fontSize={adaptiveFontSize}
+                        fontWeight="bold"
+                        style={{ pointerEvents: 'none' }}
+                      >
+                        {label}
+                      </text>
+                    </g>
+                  </g>
                 );
               })()}
 
-              {/* Generator indicator — simplified for large networks */}
-              {hasGen && (
-                <g transform={`translate(${adaptiveBusRadius + 2}, ${adaptiveBusRadius - 2})`}>
-                  <circle r={isLargeNetwork ? 5 : 8} fill="#8b5cf6" stroke="#2e3348" strokeWidth={isLargeNetwork ? 1 : 2} />
-                  <text textAnchor="middle" dy="0.35em" fill="white" fontSize={isLargeNetwork ? 8 : 11} fontWeight="bold">
-                    G
-                  </text>
-                  {/* Gen MW label — Hide if network is large or zoom is low */}
-                  {showDetail && results && genMW !== null && (
-                    <g transform="translate(14, 0)">
-                      <rect x={-2} y={-9} width={46} height={18} rx="4" fill="#8b5cf6" opacity={1} stroke="#2e3348" strokeWidth="1" />
-                      <text x={21} dy="0.35em" textAnchor="middle" fill="#fff" fontSize="11" fontWeight="bold">
-                        {genMW.toFixed(0)} MW
+              {/* Generator indicator — support multiple per bus */}
+              {(() => {
+                const busGenerators = generators.filter(g => g.bus === bus.id);
+                return busGenerators.map((gen, gIdx) => {
+                  const isActive = gen.status !== 0;
+                  // Try to find result by ID, then by bus index as fallback
+                  let genResult = results?.generator_results.find(r => r.id === gen.id);
+                  if (!genResult && results) {
+                    // Fallback: finding the i-th generator of this bus in results
+                    const sameBusResults = results.generator_results.filter(r => r.bus === bus.id);
+                    genResult = sameBusResults[gIdx];
+                  }
+                  const p_mw = genResult?.pg ?? null;
+
+                  // Offset if multiple generators. Start from middle and go down.
+                  const spacing = isLargeNetwork ? 14 : 22;
+                  const yOffset = gIdx * spacing;
+                  const xOffset = adaptiveBusRadius + 4;
+
+                  return (
+                    <g
+                      key={`gen-${gen.id}`}
+                      transform={`translate(${xOffset}, ${yOffset}) scale(${textScale})`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        usePowerSystemStore.getState().setSelectedGenerator(gen.id || null);
+                      }}
+                    >
+                      <title>{gen.name || gen.id}</title>
+                      <circle
+                        r={isLargeNetwork ? 5 : 8}
+                        fill={isActive ? "#8b5cf6" : "#64748b"}
+                        stroke={selectedGenerator === gen.id ? "#fff" : "#2e3348"}
+                        strokeWidth={isLargeNetwork ? 1 : selectedGenerator === gen.id ? 2.5 : 2}
+                        style={{ cursor: 'context-menu', filter: selectedGenerator === gen.id ? 'drop-shadow(0 0 4px #8b5cf6)' : 'none' }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          usePowerSystemStore.getState().updateGenerator(gen.id!, { status: isActive ? 0 : 1 });
+                        }}
+                      />
+                      <text textAnchor="middle" dy="0.35em" fill="white" fontSize={isLargeNetwork ? 8 : 11} fontWeight="bold" style={{ pointerEvents: 'none' }}>
+                        G
                       </text>
+                      {/* Gen MW label */}
+                      {results && p_mw !== null && isActive && (
+                        <g transform="translate(14, 0)">
+                          <rect x={-2} y={-9} width={46} height={18} rx="4" fill="#8b5cf6" opacity={1} stroke="#2e3348" strokeWidth="1" />
+                          <text x={21} dy="0.35em" textAnchor="middle" fill="#fff" fontSize="11" fontWeight="bold" style={{ pointerEvents: 'none' }}>
+                            {p_mw.toFixed(0)} MW
+                          </text>
+                        </g>
+                      )}
+                      {!isActive && (
+                        <g transform="translate(14, 0)">
+                          <rect x={-2} y={-9} width={34} height={18} rx="4" fill="#64748b" opacity={0.8} stroke="#2e3348" strokeWidth="1" />
+                          <text x={15} dy="0.35em" textAnchor="middle" fill="#fff" fontSize="10" fontWeight="bold" style={{ pointerEvents: 'none' }}>
+                            OFF
+                          </text>
+                        </g>
+                      )}
                     </g>
-                  )}
-                </g>
-              )}
+                  );
+                });
+              })()}
 
               {/* Load indicator — simplified for large networks */}
               {hasLoad && (
-                <g transform={`translate(${-adaptiveBusRadius - 2}, ${adaptiveBusRadius - 2})`}>
+                <g transform={`translate(${-adaptiveBusRadius - 4}, 0) scale(${textScale})`}>
                   <circle r={isLargeNetwork ? 5 : 8} fill="#f97316" stroke="#2e3348" strokeWidth={isLargeNetwork ? 1 : 2} />
-                  <text textAnchor="middle" dy="0.35em" fill="white" fontSize={isLargeNetwork ? 8 : 11} fontWeight="bold">
+                  <text textAnchor="middle" dy="0.35em" fill="white" fontSize={isLargeNetwork ? 8 : 11} fontWeight="bold" style={{ pointerEvents: 'none' }}>
                     L
                   </text>
-                  {/* Load MW label — Hide if network is large or zoom is low */}
-                  {showDetail && loadMW !== null && (
+                  {/* Load MW label — Always show, scale inversely */}
+                  {loadMW !== null && (
                     <g transform="translate(-14, 0)">
                       <rect x={-44} y={-9} width={46} height={18} rx="4" fill="#f97316" opacity={1} stroke="#2e3348" strokeWidth="1" />
-                      <text x={-21} dy="0.35em" textAnchor="middle" fill="#fff" fontSize="11" fontWeight="bold">
+                      <text x={-21} dy="0.35em" textAnchor="middle" fill="#fff" fontSize="11" fontWeight="bold" style={{ pointerEvents: 'none' }}>
                         {loadMW.toFixed(0)} MW
                       </text>
                     </g>
                   )}
                   {/* Curtailment label */}
-                  {showDetail && results && curtail > 0.01 && (
+                  {results && curtail > 0.01 && (
                     <g transform="translate(-14, 16)">
                       <rect x={-48} y={-9} width={56} height={18} rx="4" fill="#ef4444" opacity={1} stroke="#2e3348" strokeWidth="1" />
-                      <text x={-20} dy="0.35em" textAnchor="middle" fill="#fff" fontSize="10" fontWeight="bold">
+                      <text x={-20} dy="0.35em" textAnchor="middle" fill="#fff" fontSize="10" fontWeight="bold" style={{ pointerEvents: 'none' }}>
                         ✂ {curtail.toFixed(0)} MW
                       </text>
                     </g>
@@ -680,16 +791,19 @@ export default function NetworkCanvas() {
                 </g>
               )}
 
-              {/* Voltage angle and LMP — Hide if network is large or zoom is low */}
-              {showDetail && results && (() => {
-                const yOffset = adaptiveBusRadius + 26;
+              {/* Voltage angle and LMP — Always show, scale inversely */}
+              {results && (() => {
+                const busGenerators = generators.filter(g => g.bus === bus.id);
+                // Dynamically push results down if there are many generators to avoid overlap
+                const genOffset = Math.max(0, busGenerators.length - 1) * (isLargeNetwork ? 14 : 22);
+                const yOffset = adaptiveBusRadius + 26 + genOffset;
                 return (
-                  <g transform={`translate(0, ${yOffset})`}>
-                    <rect x="-30" y="-8" width="60" height="28" rx="4" fill="rgba(15, 23, 42, 0.75)" stroke="#2e3348" strokeWidth="1" />
-                    <text y="2" textAnchor="middle" fontSize="11" fill="#e2e8f0" fontWeight="500">
+                  <g transform={`translate(0, ${yOffset}) scale(${textScale})`}>
+                    <rect x="-30" y="-12" width="60" height="28" rx="4" fill="rgba(15, 23, 42, 0.75)" stroke="#2e3348" strokeWidth="1" />
+                    <text y="-2" textAnchor="middle" fontSize="11" fill="#e2e8f0" fontWeight="500" style={{ pointerEvents: 'none' }}>
                       {results.bus_results.find((b) => b.bus === bus.id)?.va.toFixed(1)}°
                     </text>
-                    <text y="14" textAnchor="middle" fontSize="11" fill="#a78bfa" fontWeight="700">
+                    <text y="10" textAnchor="middle" fontSize="11" fill="#a78bfa" fontWeight="700" style={{ pointerEvents: 'none' }}>
                       ${(results.bus_results.find((b) => b.bus === bus.id)?.marginal_cost || 0).toFixed(0)}/MWh
                     </text>
                   </g>

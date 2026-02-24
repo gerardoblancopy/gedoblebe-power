@@ -1,0 +1,41 @@
+﻿Grupo;Tensão MínimTae (nps.uã.o) MáximTae (nps.ãuo.) MínimTae enmsã Eom Meárgxêimncai ae m(p .Eum.)ergência (p.u.);;;
+F;0,9;1,1;0,9;1,1
+M;0,9;1,1;0,9;1,1
+H;0,9;1,1;0,9;1,1
+B;0,9;1,1;0,9;1,1
+I;0,9;1,1;0,9;1,1
+0;0,95;1,05;0,95;1,05
+K;0,9;1,1;0,9;1,1
+O;0,8;1,2;0,8;1,2
+J;0,9;1,1;0,9;1,1
+G;0,9;1,1;0,9;1,1
+E;0,9;1,1;0,9;1,1
+N;0,9;1,1;0,9;1,1
+L;0,9;1,1;0,9;1,1
+Grupo;Tensão (kV);;;
+F;13,8;;;
+M;345;;;
+H;23;;;
+B;6;;;
+I;66;;;
+0;1;;;
+K;220;;;
+O;1;;;
+J;132;;;
+G;18;;;
+E;13,2;;;
+N;500;;;
+L;241,5;;;
+Número;Nome da ÁreaIntercâmbio LíIqnuteidrocâ (mMbWio) MIníntiemrcoâ (mMbWio) Máximo (MW);;;
+15 ****** SIS. EQV 50 HZ ***0***********0 0;;;;
+2 *********** SISTEMA EST0E **********0* 0;;;;
+6 *********** SISTEMA ME0TROPOLITANO0 ** 0;;;;
+4 *********** SISTEMA CEN0TRAL ******0** 0;;;;
+3 *********** SISTEMA SU0R **********0* 0;;;;
+5 *********** SISTEMA NO0RTE ********0** 0;;;;
+8 *********** SISTEMA OE0STE *********0* 0;;;;
+12 ****** VENTA A COPEL **0************0* 0;;;;
+1 ***** SISTEMA IPU 50 HZ 0Y ACY ******0 0;;;;
+10 ****** VENTA A TRASNEA0 ***********0** 0;;;;
+9 ****** VENTA A EMSA ***0***********0** 0;;;;
+7 *********** SISTEMA CH0-YAC ********0* 0;;;;

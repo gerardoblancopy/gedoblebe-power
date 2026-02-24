@@ -1,0 +1,109 @@
+{
+  "buses": [
+    {
+      "id": 1,
+      "name": "Chile",
+      "type": 1,
+      "v_mag": 1.0,
+      "v_ang": 0.0,
+      "base_kv": 345.0,
+      "zone": 1
+    },
+    {
+      "id": 2,
+      "name": "Argentina",
+      "type": 1,
+      "v_mag": 1.0,
+      "v_ang": 0.0,
+      "base_kv": 345.0,
+      "zone": 1
+    },
+    {
+      "id": 3,
+      "name": "Paraguay",
+      "type": 1,
+      "v_mag": 1.0,
+      "v_ang": 0.0,
+      "base_kv": 345.0,
+      "zone": 1
+    }
+  ],
+  "generators": [
+    {
+      "bus": 1,
+      "pg": 0.0,
+      "qg": 0.0,
+      "vg": 1.0,
+      "mbase": 100.0,
+      "pmax": 250.0,
+      "pmin": 10.0,
+      "qmax": 300.0,
+      "qmin": -300.0,
+      "cost": [
+        0.0,
+        25.0,
+        0.0
+      ],
+      "status": 1
+    },
+    {
+      "bus": 2,
+      "pg": 0.0,
+      "qg": 0.0,
+      "vg": 1.0,
+      "mbase": 100.0,
+      "pmax": 250.0,
+      "pmin": 10.0,
+      "qmax": 300.0,
+      "qmin": -300.0,
+      "cost": [
+        0.0,
+        30.0,
+        0.0
+      ],
+      "status": 1
+    }
+  ],
+  "lines": [
+    {
+      "from_bus": 1,
+      "to_bus": 2,
+      "r": 0.01,
+      "x": 0.1,
+      "b": 0.0,
+      "rate_a": 250.0,
+      "rate_b": 250.0,
+      "rate_c": 250.0,
+      "status": 1
+    },
+    {
+      "from_bus": 2,
+      "to_bus": 3,
+      "r": 0.01,
+      "x": 0.1,
+      "b": 0.0,
+      "rate_a": 250.0,
+      "rate_b": 250.0,
+      "rate_c": 250.0,
+      "status": 1
+    }
+  ],
+  "loads": [
+    {
+      "bus": 1,
+      "pd": 100.0,
+      "qd": 0.0
+    },
+    {
+      "bus": 2,
+      "pd": 250.0,
+      "qd": 0.0
+    },
+    {
+      "bus": 3,
+      "pd": 100.0,
+      "qd": 0.0
+    }
+  ],
+  "base_mva": 100.0
+}

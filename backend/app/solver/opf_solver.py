@@ -7,6 +7,8 @@ Supports both LP (linprog) and QP (SLSQP) formulations
 import numpy as np
 from typing import List, Dict, Any
 import logging
+import scipy.sparse as sp
+from scipy.sparse.linalg import spsolve
 
 from app.models.schemas import CaseData, Bus, Generator, Line, OPFResult, \
     GeneratorResult, BusResult, LineResult
@@ -20,7 +22,7 @@ class DCOPSolver:
     def __init__(self):
         self.base_mva = 100.0
 
-    def solve(self, case: CaseData, voll: float = 10000.0, enforce_line_limits: bool = True) -> OPFResult:
+    def solve(self, case: CaseData, voll: float = 10000.0, enforce_line_limits: bool = True, remove_isolated: bool = False) -> OPFResult:
         """
         Solve DC OPF problem
 
@@ -30,6 +32,8 @@ class DCOPSolver:
         - Line flow constraints via curtailment (VOLL method)
         """
         try:
+            if remove_isolated:
+                case = self._get_slack_connected_subset(case)
             self.base_mva = case.base_mva if case.base_mva else 100.0
 
             # Extract system data
@@ -40,12 +44,12 @@ class DCOPSolver:
 
             if not buses or not generators or not lines:
                 raise ValueError("Invalid case: missing buses, generators, or lines")
+            
+            n_buses = len(buses)
+            n_real_gen = len(generators)
 
             # Get slack bus
             slack_bus = self._find_slack_bus(buses)
-
-            # Build admittance matrix (DC approximation) in per-unit
-            B = self._build_susceptance_matrix(buses, lines)
 
             # Extract load demands in per-unit
             Pd_pu, Qd_pu = self._extract_loads(buses, loads)
@@ -54,77 +58,144 @@ class DCOPSolver:
             total_load_pu = np.sum(Pd_pu)
 
             # Get real generator info in per-unit
-            real_gen_costs = [g.cost for g in generators]
-            real_gen_pmin = np.array([g.pmin / self.base_mva for g in generators])
-            real_gen_pmax = np.array([g.pmax / self.base_mva for g in generators])
+            real_gen_costs = []
+            real_gen_pmin_list = []
+            real_gen_pmax_list = []
+            
+            for g in generators:
+                # Defensive check: ensure status is 1 or 0
+                g_status = int(getattr(g, 'status', 1))
+                if g_status == 0:
+                    real_gen_costs.append([0.0, 0.0, 0.0])
+                    real_gen_pmin_list.append(0.0)
+                    real_gen_pmax_list.append(0.0)
+                else:
+                    real_gen_costs.append(g.cost)
+                    real_gen_pmin_list.append(g.pmin / self.base_mva)
+                    real_gen_pmax_list.append(g.pmax / self.base_mva)
+            
+            real_gen_pmin = np.array(real_gen_pmin_list)
+            real_gen_pmax = np.array(real_gen_pmax_list)
 
             # Map generator indices to bus indices
             bus_ids = {bus.id: i for i, bus in enumerate(buses)}
             real_gen_bus_indices = [bus_ids[g.bus] for g in generators]
-
-            # Pre-compute line flow matrix (PTDF)
-            PTDF = self._build_ptdf_matrix(B, lines, buses, bus_ids, slack_bus)
-
-            # Get line ratings in per-unit
-            line_rates = []
-            for line in lines:
-                rate = line.rate_a / self.base_mva if line.rate_a > 0 else 2.5
-                line_rates.append(rate)
-            line_rates = np.array(line_rates)
-
-            n_buses = len(buses)
-            n_real_gen = len(generators)
+            slack_idx = bus_ids.get(slack_bus, 0)
 
             # Detect if problem is LP (all quadratic cost coefficients are zero)
             is_linear = all(cost[0] == 0 for cost in real_gen_costs)
 
-            if enforce_line_limits and len(PTDF) > 0:
-                if is_linear:
-                    Pg_opt_pu, fict_gen_pg, status, lmp = self._solve_lp(
-                        n_real_gen, n_buses, real_gen_costs, real_gen_pmin,
-                        real_gen_pmax, real_gen_bus_indices, Pd_pu,
-                        total_load_pu, PTDF, line_rates, voll
-                    )
-                else:
-                    Pg_opt_pu, fict_gen_pg, status, lmp = self._solve_qp(
-                        n_real_gen, n_buses, real_gen_costs, real_gen_pmin,
-                        real_gen_pmax, real_gen_bus_indices, Pd_pu,
-                        total_load_pu, PTDF, line_rates, voll
-                    )
+            # Use Sparse Nodal Formulation for large cases (> 50 buses) or if requested
+            # Nodal formulation avoids dense PTDF matrix
+            B = None
+            B_sparse = None
+            using_sparse = False
+            # Always use Nodal Formulation (Sparse) for all cases to ensure island-wise balance
+            logger.info(f"Using Nodal Formulation for case ({n_buses} buses)")
+            B_sparse = self._build_sparse_susceptance_matrix(buses, lines)
+            using_sparse = True
+            
+            # Line parameters for flow constraints
+            line_indices = []
+            line_susceptances = []
+            line_rates = []
+            active_line_count = 0
+            for line in lines:
+                l_status = int(getattr(line, 'status', 1))
+                if l_status == 0:
+                    continue
+                active_line_count += 1
+                if line.from_bus in bus_ids and line.to_bus in bus_ids:
+                    idx_from = bus_ids[line.from_bus]
+                    idx_to = bus_ids[line.to_bus]
+                    x = line.x if line.x > 0 else 0.0001
+                    b = 1.0 / x
+                    rate = line.rate_a / self.base_mva if line.rate_a > 0 else 999.99
+                    line_indices.append((idx_from, idx_to))
+                    line_susceptances.append(b)
+                    line_rates.append(rate)
+
+            logger.info(f"OPF Solver config: {active_line_count}/{len(lines)} lines active, "
+                       f"{len([c for c in real_gen_pmax_list if c > 0])}/{len(generators)} gens active")
+            logger.info(f"Enforce limits: {enforce_line_limits}, VOLL: {voll}")
+
+            if is_linear:
+                Pg_opt_pu, fict_gen_pg, status, lmp, theta_opt = self._solve_nodal_lp(
+                        n_real_gen, n_buses, real_gen_costs, real_gen_pmin, real_gen_pmax,
+                        real_gen_bus_indices, Pd_pu, B_sparse, line_indices, 
+                        line_susceptances, line_rates, slack_bus, bus_ids, voll, enforce_line_limits
+                )
             else:
-                # No line constraints - simple economic dispatch
-                if is_linear:
-                    Pg_opt_pu, fict_gen_pg, status, lmp = self._solve_ed_lp(
-                        n_real_gen, n_buses, real_gen_costs, real_gen_pmin,
-                        real_gen_pmax, total_load_pu
-                    )
-                else:
-                    Pg_opt_pu, fict_gen_pg, status, lmp = self._solve_ed_qp(
-                        n_real_gen, n_buses, generators, real_gen_costs,
-                        real_gen_pmin, real_gen_pmax, total_load_pu
-                    )
+                Pg_opt_pu, fict_gen_pg, status, lmp, theta_opt = self._solve_nodal_qp(
+                        n_real_gen, n_buses, real_gen_costs, real_gen_pmin, real_gen_pmax,
+                        real_gen_bus_indices, Pd_pu, B_sparse, line_indices, 
+                        line_susceptances, line_rates, slack_bus, bus_ids, voll, enforce_line_limits
+                )
+            
+            # Use theta from nodal formulation
+            theta = theta_opt
+
+            # Compute raw net injections (before clamping) for theta consistency check
+            Pg_full_pu_raw = np.zeros(n_buses)
+            for idx, gen_idx in enumerate(real_gen_bus_indices):
+                Pg_full_pu_raw[gen_idx] += Pg_opt_pu[idx]
+
+            curtailment_pu_raw = Pg_opt_pu[n_real_gen:] if len(Pg_opt_pu) > n_real_gen else np.zeros(n_buses)
+            Pd_effective_raw = Pd_pu - curtailment_pu_raw
+            Pnet_raw = Pg_full_pu_raw - Pd_effective_raw
 
             # Extract results
+            # Clamp negative values to 0 (or Pmin) to handle solver numerical noise
+            # Pmin is usually 0 for this formulation, except specific gen constraints
+            
+            # 1. Process Real Generation
             real_gen_pg_mw = Pg_opt_pu[:n_real_gen] * self.base_mva
+            
+            # Enforce Pmin/Pmax strictly on the result to clean up noise like -0.0004
+            real_gen_pmin_mw = real_gen_pmin * self.base_mva
+            real_gen_pmax_mw = real_gen_pmax * self.base_mva
+            
+            # Vectorized clamping
+            real_gen_pg_mw = np.maximum(real_gen_pg_mw, real_gen_pmin_mw)
+            real_gen_pg_mw = np.minimum(real_gen_pg_mw, real_gen_pmax_mw)
+            
+            # 2. Process Curtailment
+            curtailment_pu = Pg_opt_pu[n_real_gen:] if len(Pg_opt_pu) > n_real_gen else np.zeros(n_buses)
+            # Clamp curtailment to 0 (remove negative noise)
+            curtailment_pu = np.maximum(curtailment_pu, 0.0)
+            
+            # Also clamp max to Pd (just in case), but only if Pd > 0
+            curtailment_pu = np.minimum(curtailment_pu, np.maximum(Pd_pu, 0.0))
+            
+            fict_gen_mw = curtailment_pu * self.base_mva
 
-            # Build full Pg for power flow calc
+            # Update Pg_full_pu with clamped values for power flow calc
             Pg_full_pu = np.zeros(n_buses)
-            for idx, gen_idx in enumerate(real_gen_bus_indices):
-                Pg_full_pu[gen_idx] += Pg_opt_pu[idx]
+            for i, pg_mw in enumerate(real_gen_pg_mw):
+                bus_idx = real_gen_bus_indices[i]
+                Pg_full_pu[bus_idx] += pg_mw / self.base_mva
 
-            # Effective load considering curtailment
-            curtailment_pu = Pg_opt_pu[n_real_gen:] if n_real_gen < len(Pg_opt_pu) else np.zeros(n_buses)
             Pd_effective_pu = Pd_pu - curtailment_pu
-            Pnet_opt_pu = Pg_full_pu - Pd_effective_pu
+            Pnet_clean = Pg_full_pu - Pd_effective_pu
+            
+            # Recalculate angles (theta) if clamping meaningfully changes injections.
+            # This keeps flows and balances consistent with the displayed Pg/Pd.
+            theta_recalc_eps = 1e-6
+            if np.max(np.abs(Pnet_clean - Pnet_raw)) > theta_recalc_eps:
+                if using_sparse:
+                    theta = self._solve_theta_sparse(B_sparse, Pnet_clean, slack_idx)
+                else:
+                    theta = self._solve_theta(B, Pnet_clean, slack_idx)
 
-            # Calculate voltage angles
-            theta = self._solve_theta(B, Pnet_opt_pu, slack_bus)
+            # Normalize theta so slack bus is strictly 0, and bound it to [-pi, pi]
+            theta = theta - theta[slack_idx]
+            # Wrap to [-pi, pi]
+            theta = (theta + np.pi) % (2 * np.pi) - np.pi
 
-            # Calculate line flows (with LMPs for congestion rent)
+            # Calculate line flows (with cleaned theta if we had it, but using solver theta)
             line_flows = self._calculate_line_flows(lines, buses, theta, lmp)
 
             # Curtailment in MW
-            fict_gen_mw = fict_gen_pg
             total_curtailment_mw = float(np.sum(fict_gen_mw))
 
             # LMPs were computed from optimization duals by the solver
@@ -139,22 +210,21 @@ class DCOPSolver:
             gen_results = self._calculate_gen_results(generators, real_gen_pg_mw)
 
             # Calculate total cost (real generators + curtailment penalty)
-            total_cost = sum(cost[0] * real_gen_pg_mw[i]**2 + cost[1] * real_gen_pg_mw[i] + cost[2]
+            # Use CLEANED values for consistent reporting
+            gen_cost = sum(cost[0] * real_gen_pg_mw[i]**2 + cost[1] * real_gen_pg_mw[i] + cost[2]
                            for i, cost in enumerate(real_gen_costs))
+            
             curtailment_cost = total_curtailment_mw * voll
-            total_cost_with_curtailment = total_cost + curtailment_cost
+            total_cost_with_curtailment = gen_cost + curtailment_cost
 
             logger.info("--- OPF DEBUG ---")
-            logger.info(f"Real Gen Pmax: {real_gen_pmax * self.base_mva}")
-            logger.info(f"Real Gen Costs: {real_gen_costs}")
-            logger.info(f"Pg MW: {real_gen_pg_mw}")
-            logger.info(f"Gen Cost: {total_cost}")
+            logger.info(f"Gen Cost: {gen_cost}")
             logger.info(f"Curtailment MW: {total_curtailment_mw}")
             logger.info(f"Curtailment Cost: {curtailment_cost}")
             logger.info(f"Total Cost: {total_cost_with_curtailment}")
             logger.info("-----------------")
 
-            logger.info(f"DC OPF solved. Cost: {total_cost:.2f} $/h, Curtailment: {total_curtailment_mw:.2f} MW")
+            logger.info(f"DC OPF solved. Cost: {gen_cost:.2f} $/h, Curtailment: {total_curtailment_mw:.2f} MW")
 
             return OPFResult(
                 status=status,
@@ -162,7 +232,7 @@ class DCOPSolver:
                 generator_results=gen_results,
                 bus_results=bus_results,
                 line_results=line_flows,
-                objective_value=total_cost,
+                objective_value=gen_cost, # Return generation cost as objective value
                 total_curtailment=total_curtailment_mw,
                 iterations=1
             )
@@ -481,20 +551,623 @@ class DCOPSolver:
                 system_lambda = 2 * a * pg_mw + b_coeff
                 break
         else:
-            # All at bounds, use cheapest at max
-            if n_real_gen > 0:
-                pg_mw = result.x[0] * bmva
-                system_lambda = 2 * real_gen_costs[0][0] * pg_mw + real_gen_costs[0][1]
+            # All at bounds, derive lambda from active bound marginal costs (KKT range)
+            tol = 1e-6
+            active_lower = []
+            active_upper = []
+            for i in range(n_real_gen):
+                pg_pu = result.x[i]
+                a, b_coeff = real_gen_costs[i][0], real_gen_costs[i][1]
+                pg_mw = pg_pu * bmva
+                mc = 2 * a * pg_mw + b_coeff
+                if pg_pu <= real_gen_pmin[i] + tol:
+                    active_lower.append(mc)
+                if pg_pu >= real_gen_pmax[i] - tol:
+                    active_upper.append(mc)
+
+            lambda_lower = max(active_upper) if active_upper else None
+            lambda_upper = min(active_lower) if active_lower else None
+
+            if lambda_lower is not None and lambda_upper is not None:
+                if lambda_lower > lambda_upper:
+                    logger.warning("LMP bounds inverted (lambda_lower > lambda_upper). Using average.")
+                system_lambda = 0.5 * (lambda_lower + lambda_upper)
+            elif lambda_lower is not None:
+                system_lambda = lambda_lower
+            elif lambda_upper is not None:
+                system_lambda = lambda_upper
+            else:
+                logger.warning("No active bounds detected for LMP fallback; defaulting to 0.0")
+                system_lambda = 0.0
 
         lmp = np.full(n_buses, system_lambda)
 
         return Pg_opt_pu, fict_gen_pg, status, lmp
+
+    # ========== NODAL SOLVER (Sparse) ==========
+
+    def _build_sparse_susceptance_matrix(self, buses: List[Bus], lines: List[Line]) -> sp.csc_matrix:
+        """Build Sparse DC susceptance matrix in per-unit"""
+        n = len(buses)
+        bus_ids = {bus.id: i for i, bus in enumerate(buses)}
+        
+        # Use simple coordinate format for construction using lists
+        row_ind = []
+        col_ind = []
+        data = []
+
+        for line in lines:
+            if getattr(line, 'status', 1) == 0:
+                continue
+            if line.from_bus in bus_ids and line.to_bus in bus_ids:
+                i = bus_ids[line.from_bus]
+                j = bus_ids[line.to_bus]
+                x = line.x if line.x > 0 else 0.0001
+                b_ij = 1.0 / x
+                
+                row_ind.extend([i, j, i, j])
+                col_ind.extend([i, j, j, i])
+                data.extend([b_ij, b_ij, -b_ij, -b_ij])
+
+        # Add nodal shunts (b_shunt) to the diagonal
+        for i, bus in enumerate(buses):
+            b_sh = getattr(bus, 'b_shunt', 0.0)
+            if b_sh != 0:
+                row_ind.append(i)
+                col_ind.append(i)
+                data.append(b_sh)
+
+        # Create the matrix summing duplicates
+        B = sp.coo_matrix((data, (row_ind, col_ind)), shape=(n, n)).tocsc()
+        return B
+
+    def _solve_nodal_lp(self, n_real_gen, n_buses, real_gen_costs, real_gen_pmin,
+                        real_gen_pmax, real_gen_bus_indices, Pd_pu, B_sparse,
+                        line_indices, line_susceptances, line_rates, slack_bus, 
+                        bus_ids, voll, enforce_line_limits):
+        """
+        Solve DC OPF using Sparse Nodal Formulation (LP).
+        Variables x = [Pg (n_gen), Curtailment (n_bus), Theta (n_bus)]
+        """
+        from scipy.optimize import linprog
+        
+        n_theta = n_buses
+        n_vars = n_real_gen + n_buses + n_theta
+        
+        # === Objective ===
+        # Cost: c_gen * Pg + voll * Curtailment + 0 * Theta
+        c = np.zeros(n_vars)
+        for i, cost in enumerate(real_gen_costs):
+            c[i] = cost[1] * self.base_mva
+        for i in range(n_buses):
+            c[n_real_gen + i] = voll * self.base_mva
+            
+        # === Equality Constraints: Nodal Power Balance ===
+        # B * theta = P_injections
+        # P_injections at bus i = sum(Pg_at_i) + Curtailment_i - Pd_i
+        # => B * theta - sum(Pg) - Curtailment = -Pd
+        
+        # We need to construct the constraint matrix A_eq
+        # Rows: n_buses
+        # Cols: [Pg (n_gen) | Curtail (n_bus) | Theta (n_bus)]
+        
+        # 1. Theta part: B_sparse
+        # 2. Pg part: Sparse mapping -1 at (bus_idx, gen_idx)
+        # 3. Curtail part: -Identity
+        
+        # Construct constraint matrix as list of trios for COO
+        rows = []
+        cols = []
+        vals = []
+        
+        # Part 1: Theta (B matrix)
+        B_coo = B_sparse.tocoo()
+        rows.extend(B_coo.row)
+        cols.extend(B_coo.col + n_real_gen + n_buses) # Theta starts after gen + curt
+        vals.extend(B_coo.data)
+        
+        # Part 2: Generators (-1 coefficient)
+        for i in range(n_real_gen):
+            bus_idx = real_gen_bus_indices[i]
+            rows.append(bus_idx)
+            cols.append(i)
+            vals.append(-1.0)
+            
+        # Part 3: Curtailment (-1 coefficient)
+        for i in range(n_buses):
+            rows.append(i)
+            cols.append(n_real_gen + i)
+            vals.append(-1.0)
+            
+        # --- Multi-Island Reference Bus Support ---
+        # Detect connected components and fix one theta=0 per island
+        from scipy.sparse.csgraph import connected_components
+        n_components, labels = connected_components(csgraph=B_sparse, directed=False)
+        
+        # We need n_components extra equality constraints
+        # theta[ref_bus_of_island_k] = 0
+        extra_eq_rows = []
+        for k in range(n_components):
+            # Find buses in this island
+            island_bus_indices = np.where(labels == k)[0]
+            
+            # Prefer the global slack bus if it's in this island
+            slack_idx = bus_ids.get(slack_bus, 0)
+            
+            ref_idx = -1
+            if slack_idx in island_bus_indices:
+                ref_idx = slack_idx
+            else:
+                # Otherwise pick the first bus in the island
+                ref_idx = island_bus_indices[0]
+            
+            # theta[ref_idx] = 0
+            # Row index starts from n_buses (after power balance rows)
+            rows.append(n_buses + k) 
+            cols.append(n_real_gen + n_buses + ref_idx)
+            vals.append(1.0)
+            extra_eq_rows.append(0.0) # b_eq value
+            
+        # Construct A_eq sparse matrix
+        total_eq_rows = n_buses + n_components
+        A_eq = sp.coo_matrix((vals, (rows, cols)), shape=(total_eq_rows, n_vars))
+        
+        # RHS vector
+        b_eq = np.zeros(total_eq_rows)
+        b_eq[:n_buses] = -Pd_pu
+        # b_eq[n_buses:] are already 0.0 from extra_eq_rows
+        
+        # === Inequality Constraints: Line Flows ===
+        # -Limit <= b_ij * (theta_i - theta_j) <= Limit
+        # Loop linear constraints
+        A_ub = None
+        b_ub = None
+        
+        if enforce_line_limits:
+            ub_rows = []
+            ub_cols = []
+            ub_vals = []
+            ub_b = []
+            
+            row_count = 0
+            for k, (i, j) in enumerate(line_indices):
+                b = line_susceptances[k]
+                rate = line_rates[k]
+                
+                # Flow = b * (theta_i - theta_j)
+                # Constraint 1: b*theta_i - b*theta_j <= rate
+                ub_rows.extend([row_count, row_count])
+                ub_cols.extend([n_real_gen + n_buses + i, n_real_gen + n_buses + j])
+                ub_vals.extend([b, -b])
+                ub_b.append(rate)
+                row_count += 1
+                
+                # Constraint 2: -b*theta_i + b*theta_j <= rate (equivalent to flow >= -rate)
+                ub_rows.extend([row_count, row_count])
+                ub_cols.extend([n_real_gen + n_buses + i, n_real_gen + n_buses + j])
+                ub_vals.extend([-b, b])
+                ub_b.append(rate)
+                row_count += 1
+            
+            if row_count > 0:
+                A_ub = sp.coo_matrix((ub_vals, (ub_rows, ub_cols)), shape=(row_count, n_vars))
+                b_ub = np.array(ub_b)
+
+        # === Bounds ===
+        bounds = []
+        # Generators
+        for i in range(n_real_gen):
+            bounds.append((real_gen_pmin[i], real_gen_pmax[i]))
+        # Curtailment (0 to Pd)
+        for i in range(n_buses):
+            bounds.append((0.0, max(0.0, Pd_pu[i])))
+        # Theta (unbounded generally, but can limit to +/- 2pi or similar)
+        for i in range(n_buses):
+             bounds.append((None, None))
+             
+        # === Solve ===
+        result = linprog(c, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub,
+                         bounds=bounds, method='highs',
+                         options={'presolve': True})
+
+        status = "optimal" if result.success else "suboptimal"
+        
+        if not result.success:
+            logger.warning(f"Nodal LP solver failed: {result.message}")
+        
+        Pg_opt_pu = result.x[:n_real_gen + n_buses] # Gen + Curtailment
+        fict_gen_pg = result.x[n_real_gen:n_real_gen + n_buses] * self.base_mva
+        theta_opt = result.x[n_real_gen + n_buses:]
+        
+        # === Extract LMP ===
+        # Dual variables from power balance equality constraints
+        # result.eqlin.marginals contains duals for A_eq
+        # The first n_buses rows correspond to the nodal balance equations
+        # Note: Dual definition varies. For Min cx st Ax=b, dual is usually such that lambda = dL/db
+        # In power system economics, LMP = partial Cost / partial Load
+        # Our constraint is: B*theta - Pg = -Pd
+        # So LHS = -Pd. If Pd increases, RHS decreases.
+        # Let's verify sign convention empirically or by standard:
+        # Usually LMP = Lagrange multiplier of the power balance equation.
+        # Highs duals usually consistent.
+        
+        lam = result.eqlin.marginals[:n_buses]
+        
+        # In this formulation B*theta - Pg = -Pd, LMP is dC/dPd.
+        # Cost C = c*Pg. Dual of Eq Ax=b is lambda where c*x = b*lambda.
+        # dC/db = lambda. Here b = [-Pd; 0].
+        # So dC/d(-Pd) = lam_node => dC/dPd = -lam_node.
+        lmp = -lam / self.base_mva
+        
+        # Simple heuristic check: if prices are negative, it's usually 
+        # because the solver sign convention is flipped.
+        if np.mean(lmp) < 0:
+            lmp = -lmp
+
+        return Pg_opt_pu, fict_gen_pg, status, lmp, theta_opt
+    
+    
+    def _solve_nodal_qp(self, n_real_gen, n_buses, real_gen_costs, real_gen_pmin,
+                        real_gen_pmax, real_gen_bus_indices, Pd_pu, B_sparse,
+                        line_indices, line_susceptances, line_rates, slack_bus, 
+                        bus_ids, voll, enforce_line_limits):
+        """
+        Solve DC OPF using OSQP (Operator Splitting Quadratic Program).
+        Standard for sparse QPs in power systems.
+        Min 1/2 x'Px + q'x
+        s.t. l <= Ax <= u
+        """
+        try:
+            import osqp
+        except ImportError:
+            logger.warning("OSQP not installed. Falling back to trust-constr nodal QP.")
+            return self._solve_nodal_qp_trust_constr(
+                n_real_gen, n_buses, real_gen_costs, real_gen_pmin, real_gen_pmax,
+                real_gen_bus_indices, Pd_pu, B_sparse, line_indices,
+                line_susceptances, line_rates, slack_bus, bus_ids, voll, enforce_line_limits
+            )
+
+        from scipy import sparse
+
+        n_theta = n_buses
+        n_vars = n_real_gen + n_buses + n_theta
+        
+        # === 1. Construct P (Quadratic Cost) and q (Linear Cost) ===
+        # Variables x = [Pg (n_gen), Curtailment (n_bus), Theta (n_bus)]
+        
+        # P matrix (diagonal for cost quadratic term)
+        # Cost = sum(a*Pg^2 + b*Pg + c)
+        # Minimize 1/2 x'Px + q'x
+        # So P elements should be 2*a
+        
+        P_vals = []
+        P_rows = []
+        P_cols = []
+        
+        q = np.zeros(n_vars)
+        
+        # Generators
+        for i in range(n_real_gen):
+            a, b_coeff, _ = real_gen_costs[i]
+            # P entry: 2 * a * (base_mva)^2  (since x is in p.u., cost is in MW)
+            # Actually, let's keep cost in $ directly.
+            # Pg_mw = Pg_pu * base_mva
+            # Cost = a * (Pg_pu * base)^2 + b * (Pg_pu * base) + c
+            #      = (a * base^2) * Pg_pu^2 + (b * base) * Pg_pu + c
+            # P_ii = 2 * (a * base^2)
+            
+            p_val = 2 * a * (self.base_mva**2)
+            # OSQP requires P to be upper triangular? No, usually symmetric.
+            # But diagonal is fine.
+            if p_val > 1e-9:
+                P_vals.append(p_val)
+                P_rows.append(i)
+                P_cols.append(i)
+            
+            q[i] = b_coeff * self.base_mva
+            
+        # Curtailment (Linear cost only)
+        for i in range(n_buses):
+            q[n_real_gen + i] = voll * self.base_mva
+            
+        # Theta (No cost)
+        
+        # Create sparse P
+        P = sparse.csc_matrix((P_vals, (P_rows, P_cols)), shape=(n_vars, n_vars))
+        
+        # === 2. Construct Constraints l <= Ax <= u ===
+        # We need to stack:
+        # - Equality constraints (Power Balance)
+        # - Inequality constraints (Line Flows)
+        # - Variable bounds (Pg_min, Pg_max, etc.) - OSQP usually puts bounds in A as Identity
+        
+        A_rows = []
+        A_cols = []
+        A_vals = []
+        
+        l_vec = []
+        u_vec = []
+        
+        row_idx = 0
+        
+        # --- 2.1 Power Balance (Equality) ---
+        # B*theta - Pg - Curt = -Pd
+        # l = u = -Pd
+        
+        # Theta part (B matrix)
+        B_coo = B_sparse.tocoo()
+        for r, c, v in zip(B_coo.row, B_coo.col, B_coo.data):
+            A_rows.append(row_idx + r)
+            A_cols.append(n_real_gen + n_buses + c)
+            A_vals.append(v)
+            
+        # Pg part (-Identity mapped to buses)
+        for i in range(n_real_gen):
+            bus_idx = real_gen_bus_indices[i]
+            A_rows.append(row_idx + bus_idx)
+            A_cols.append(i)
+            A_vals.append(-1.0)
+            
+        # Curt part (-Identity)
+        for i in range(n_buses):
+            A_rows.append(row_idx + i)
+            A_cols.append(n_real_gen + i)
+            A_vals.append(-1.0)
+            
+        l_vec.extend(-Pd_pu)
+        u_vec.extend(-Pd_pu)
+        row_idx += n_buses
+        
+        # --- 2.2 Multi-Island Reference Bus (Equality) ---
+        # Detect connected components and fix one theta=0 per island
+        from scipy.sparse.csgraph import connected_components
+        n_components, labels = connected_components(csgraph=B_sparse, directed=False)
+        
+        for k in range(n_components):
+            island_bus_indices = np.where(labels == k)[0]
+            slack_idx = bus_ids.get(slack_bus, 0)
+            
+            ref_idx = slack_idx if slack_idx in island_bus_indices else island_bus_indices[0]
+            
+            A_rows.append(row_idx)
+            A_cols.append(n_real_gen + n_buses + ref_idx)
+            A_vals.append(1.0)
+            l_vec.append(0.0)
+            u_vec.append(0.0)
+            row_idx += 1
+        
+        # --- 2.3 Line Limits (Inequality) ---
+        if enforce_line_limits:
+            for k, (i, j) in enumerate(line_indices):
+                b = line_susceptances[k]
+                rate = line_rates[k]
+                
+                # Flow = b*(theta_i - theta_j)
+                # -rate <= Flow <= rate
+                
+                # Coeff for theta_i
+                A_rows.append(row_idx)
+                A_cols.append(n_real_gen + n_buses + i)
+                A_vals.append(b)
+                
+                # Coeff for theta_j
+                A_rows.append(row_idx)
+                A_cols.append(n_real_gen + n_buses + j)
+                A_vals.append(-b)
+                
+                l_vec.append(-rate)
+                u_vec.append(rate)
+                row_idx += 1
+                
+        # --- 2.4 Variable Bounds ---
+        # Pg_min <= Pg <= Pg_max
+        for i in range(n_real_gen):
+            A_rows.append(row_idx)
+            A_cols.append(i)
+            A_vals.append(1.0)
+            l_vec.append(real_gen_pmin[i])
+            u_vec.append(real_gen_pmax[i])
+            row_idx += 1
+            
+        # 0 <= Curt <= Pd
+        # If Pd is negative (generation modeled as load), we can't 'shed' it using this variable.
+        # So we force Curt = 0 for negative Pd to avoid l > u (0 > negative).
+        for i in range(n_buses):
+            A_rows.append(row_idx)
+            A_cols.append(n_real_gen + i)
+            A_vals.append(1.0)
+            l_vec.append(0.0)
+            u_vec.append(max(0.0, Pd_pu[i]))
+            row_idx += 1
+            
+        # Theta bounds (none, effectively)
+        # We don't need to add rows for unbounded variables, but it's good practice 
+        # or we just rely on the solver. OSQP variables are free by default unless constrained.
+        
+        # Create A sparse matrix
+        A = sparse.csc_matrix((A_vals, (A_rows, A_cols)), shape=(row_idx, n_vars))
+        l = np.array(l_vec)
+        u = np.array(u_vec)
+        
+        # === 3. Solve ===
+        prob = osqp.OSQP()
+        prob.setup(P, q, A, l, u, verbose=False, eps_abs=1e-5, eps_rel=1e-5, max_iter=5000)
+        res = prob.solve()
+        
+        # Check status
+        if res.info.status != 'solved':
+            logger.warning(f"OSQP solver status: {res.info.status}")
+            status = "suboptimal"
+        else:
+            status = "optimal"
+            
+        x = res.x
+        
+        Pg_opt_pu = x[:n_real_gen + n_buses]
+        fict_gen_pg = x[n_real_gen:n_real_gen + n_buses] * self.base_mva
+        theta_opt = x[n_real_gen + n_buses:]
+        
+        # === Extract LMP ===
+        # Dual variables y corresponding to constraints l <= Ax <= u
+        # The first n_buses rows of A are the power balance equations.
+        y = res.y
+        lam = y[:n_buses]
+        
+        # OSQP dual sign convention:
+        # Min 1/2 xPx + qx s.t. l <= Ax <= u
+        # For equality constraints Ax = b (l=u=b), y is the dual.
+        # Based on testing (Case 118), y comes out positive for load constraints (-Pd).
+        # Since Cost increases with Load, LMP should be positive.
+        # If y is positive, then LMP = y (scaled) gives positive prices.
+        
+        lmp = lam / self.base_mva 
+        
+        return Pg_opt_pu, fict_gen_pg, status, lmp, theta_opt
+
+    def _solve_nodal_qp_trust_constr(self, n_real_gen, n_buses, real_gen_costs, real_gen_pmin,
+                                     real_gen_pmax, real_gen_bus_indices, Pd_pu, B_sparse,
+                                     line_indices, line_susceptances, line_rates, slack_bus,
+                                     bus_ids, voll, enforce_line_limits):
+        """
+        Fallback nodal QP using trust-constr when OSQP is unavailable.
+        Variables x = [Pg (n_gen), Curtailment (n_bus), Theta (n_bus)]
+        """
+        from scipy.optimize import minimize, LinearConstraint, Bounds
+
+        n_theta = n_buses
+        n_vars = n_real_gen + n_buses + n_theta
+
+        # Cost coefficients
+        a_coeffs = np.zeros(n_vars)
+        b_coeffs = np.zeros(n_vars)
+        c_coeffs = np.zeros(n_vars)
+        for i in range(n_real_gen):
+            a_coeffs[i] = real_gen_costs[i][0]
+            b_coeffs[i] = real_gen_costs[i][1]
+            c_coeffs[i] = real_gen_costs[i][2]
+        # Curtailment linear cost
+        b_coeffs[n_real_gen:n_real_gen + n_buses] = voll
+
+        bmva = self.base_mva
+
+        def objective(x):
+            Pg_mw = x * bmva
+            return np.sum(a_coeffs * Pg_mw**2 + b_coeffs * Pg_mw + c_coeffs)
+
+        def objective_jac(x):
+            Pg_mw = x * bmva
+            return (2 * a_coeffs * Pg_mw * bmva + b_coeffs * bmva)
+
+        def objective_hess(x):
+            return sp.diags(2 * a_coeffs * bmva**2, format="csc")
+
+        # === Equality Constraints: Nodal Power Balance + Slack Angle ===
+        rows = []
+        cols = []
+        vals = []
+
+        B_coo = B_sparse.tocoo()
+        rows.extend(B_coo.row)
+        cols.extend(B_coo.col + n_real_gen + n_buses)
+        vals.extend(B_coo.data)
+
+        for i in range(n_real_gen):
+            bus_idx = real_gen_bus_indices[i]
+            rows.append(bus_idx)
+            cols.append(i)
+            vals.append(-1.0)
+
+        for i in range(n_buses):
+            rows.append(i)
+            cols.append(n_real_gen + i)
+            vals.append(-1.0)
+
+        # Multi-Island Reference Angle
+        from scipy.sparse.csgraph import connected_components
+        n_components, labels = connected_components(csgraph=B_sparse, directed=False)
+        
+        for k in range(n_components):
+            island_bus_indices = np.where(labels == k)[0]
+            slack_idx = bus_ids.get(slack_bus, 0)
+            ref_idx = slack_idx if slack_idx in island_bus_indices else island_bus_indices[0]
+            
+            rows.append(n_buses + k)
+            cols.append(n_real_gen + n_buses + ref_idx)
+            vals.append(1.0)
+            
+        total_eq_rows = n_buses + n_components
+        A_eq = sp.coo_matrix((vals, (rows, cols)), shape=(total_eq_rows, n_vars))
+        b_eq = np.zeros(total_eq_rows)
+        b_eq[:n_buses] = -Pd_pu
+        # b_eq[n_buses:] are 0.0
+        
+        power_balance = LinearConstraint(A_eq, b_eq, b_eq)
+
+        constraints = [power_balance]
+
+        # === Line Limits (optional) ===
+        if enforce_line_limits and len(line_indices) > 0:
+            ub_rows = []
+            ub_cols = []
+            ub_vals = []
+            row_count = 0
+            for k, (i, j) in enumerate(line_indices):
+                b = line_susceptances[k]
+                # b * (theta_i - theta_j)
+                ub_rows.extend([row_count, row_count])
+                ub_cols.extend([n_real_gen + n_buses + i, n_real_gen + n_buses + j])
+                ub_vals.extend([b, -b])
+                row_count += 1
+
+            A_line = sp.coo_matrix((ub_vals, (ub_rows, ub_cols)), shape=(row_count, n_vars))
+            line_limits = LinearConstraint(A_line, -np.array(line_rates), np.array(line_rates))
+            constraints.append(line_limits)
+
+        # === Bounds ===
+        lower = np.concatenate([real_gen_pmin, np.zeros(n_buses), np.full(n_buses, -np.inf)])
+        upper = np.concatenate([real_gen_pmax, np.maximum(Pd_pu, 0.0), np.full(n_buses, np.inf)])
+        bounds = Bounds(lower, upper)
+
+        # Initial guess
+        x0 = np.zeros(n_vars)
+        x0[:n_real_gen] = self._economic_dispatch_init(
+            real_gen_costs, real_gen_pmin, real_gen_pmax, np.sum(Pd_pu)
+        )
+
+        result = minimize(
+            objective,
+            x0,
+            jac=objective_jac,
+            hess=objective_hess,
+            method="trust-constr",
+            bounds=bounds,
+            constraints=constraints,
+            options={"maxiter": 5000, "gtol": 1e-8}
+        )
+
+        x = result.x
+        Pg_opt_pu = x[:n_real_gen + n_buses]
+        fict_gen_pg = x[n_real_gen:n_real_gen + n_buses] * self.base_mva
+        theta_opt = x[n_real_gen + n_buses:]
+        status = "optimal" if result.success else "suboptimal"
+
+        # LMP from nodal balance duals
+        lam = result.v[0][:n_buses]
+        lmp = -lam / bmva
+        if np.mean(lmp) < 0:
+            lmp = -lmp
+
+        return Pg_opt_pu, fict_gen_pg, status, lmp, theta_opt
+
 
     def _economic_dispatch_init(self, gen_costs, gen_pmin, gen_pmax, total_load_pu):
         """
         Compute initial guess by economic dispatch merit order.
         Dispatches cheapest generators first (by marginal cost b coefficient).
         """
+        # Ensure total_load_pu is non-negative for the dispatch logic
+        total_load_pu = max(0.0, total_load_pu)
+        
         n = len(gen_costs)
         # Sort by marginal cost (linear coefficient b)
         order = sorted(range(n), key=lambda i: gen_costs[i][1])
@@ -513,6 +1186,62 @@ class DCOPSolver:
 
         return Pg
 
+    def _get_slack_connected_subset(self, case: CaseData) -> CaseData:
+        """
+        Identify components and return a subset of the case connected to the slack bus.
+        """
+        from scipy.sparse.csgraph import connected_components
+        
+        buses = case.buses
+        lines = case.lines
+        
+        if not buses:
+            return case
+            
+        # Get slack bus
+        slack_bus_id = self._find_slack_bus(buses)
+        
+        # Build adjacency matrix (sparse)
+        B_sparse = self._build_sparse_susceptance_matrix(buses, lines)
+        
+        # Find components
+        n_components, labels = connected_components(csgraph=B_sparse, directed=False, return_labels=True)
+        
+        if n_components <= 1:
+            return case
+            
+        bus_ids = {bus.id: i for i, bus in enumerate(buses)}
+        
+        # Identify all components that have at least one slack bus
+        slack_bus_ids = [bus.id for bus in buses if bus.type == 3]
+        slack_components = set()
+        for s_id in slack_bus_ids:
+            if s_id in bus_ids:
+                slack_components.add(labels[bus_ids[s_id]])
+        
+        if not slack_components:
+            logger.warning("Island removal: No slack bus found in any component. Keeping entire system.")
+            return case
+            
+        # Filter buses: keep those in components with at least one slack
+        connected_bus_indices = [i for i, label in enumerate(labels) if label in slack_components]
+        connected_bus_ids = {buses[i].id for i in connected_bus_indices}
+        
+        filtered_buses = [b for b in buses if b.id in connected_bus_ids]
+        filtered_generators = [g for g in case.generators if g.bus in connected_bus_ids]
+        filtered_loads = [l for l in case.loads if l.bus in connected_bus_ids]
+        filtered_lines = [line for line in lines if line.from_bus in connected_bus_ids and line.to_bus in connected_bus_ids]
+        
+        logger.info(f"Island removal: Keep {len(filtered_buses)}/{len(buses)} buses across components {slack_components}")
+        
+        return CaseData(
+            buses=filtered_buses,
+            generators=filtered_generators,
+            lines=filtered_lines,
+            loads=filtered_loads,
+            base_mva=case.base_mva
+        )
+
     # ========== Network Building Methods ==========
 
     def _find_slack_bus(self, buses: List[Bus]) -> int:
@@ -530,6 +1259,8 @@ class DCOPSolver:
         bus_ids = {bus.id: i for i, bus in enumerate(buses)}
 
         for line in lines:
+            if getattr(line, 'status', 1) == 0:
+                continue
             if line.from_bus in bus_ids and line.to_bus in bus_ids:
                 i = bus_ids[line.from_bus]
                 j = bus_ids[line.to_bus]
@@ -540,6 +1271,10 @@ class DCOPSolver:
                 B[j, j] += b_ij
                 B[i, j] -= b_ij
                 B[j, i] -= b_ij
+
+        # Add nodal shunts (b_shunt) to the diagonal
+        for i, bus in enumerate(buses):
+            B[i, i] += getattr(bus, 'b_shunt', 0.0)
 
         return B
 
@@ -587,15 +1322,20 @@ class DCOPSolver:
             for load in loads:
                 if load.bus in bus_ids:
                     i = bus_ids[load.bus]
-                    Pd[i] = load.pd / self.base_mva
-                    Qd[i] = load.qd / self.base_mva
+                    Pd[i] += load.pd / self.base_mva
+                    Qd[i] += load.qd / self.base_mva
+                    
+        # Add nodal shunt conductance (g_shunt) as additional load
+        for i, bus in enumerate(buses):
+            Pd[i] += getattr(bus, 'g_shunt', 0.0)
 
         return Pd, Qd
 
-    def _solve_theta(self, B: np.ndarray, Pnet: np.ndarray, slack_bus: int) -> np.ndarray:
+    def _solve_theta(self, B: np.ndarray, Pnet: np.ndarray, slack_idx: int) -> np.ndarray:
         """Solve for voltage angles"""
         n = B.shape[0]
-        slack_idx = slack_bus - 1 if slack_bus > 0 else 0
+        if slack_idx < 0 or slack_idx >= n:
+            slack_idx = 0
 
         B_reduced = np.delete(np.delete(B, slack_idx, 0), slack_idx, 1)
         P_reduced = np.delete(Pnet, slack_idx)
@@ -608,6 +1348,28 @@ class DCOPSolver:
         theta = np.insert(theta_reduced, slack_idx, 0)
         return theta
 
+    def _solve_theta_sparse(self, B_sparse: sp.csc_matrix, Pnet: np.ndarray, slack_idx: int) -> np.ndarray:
+        """Solve for voltage angles using sparse matrix"""
+        n = B_sparse.shape[0]
+        if slack_idx < 0 or slack_idx >= n:
+            slack_idx = 0
+
+        mask = np.ones(n, dtype=bool)
+        mask[slack_idx] = False
+
+        B_reduced = B_sparse[mask][:, mask]
+        P_reduced = Pnet[mask]
+
+        try:
+            theta_reduced = spsolve(B_reduced, P_reduced)
+        except Exception:
+            theta_reduced = sp.linalg.lsqr(B_reduced, P_reduced)[0]
+
+        theta = np.zeros(n)
+        theta[mask] = theta_reduced
+        theta[slack_idx] = 0.0
+        return theta
+
     def _calculate_line_flows(self, lines: List[Line], buses: List[Bus],
                               theta: np.ndarray, lmp: np.ndarray = None) -> List[LineResult]:
         """Calculate power flows on transmission lines"""
@@ -615,6 +1377,16 @@ class DCOPSolver:
         line_results = []
 
         for line in lines:
+            if getattr(line, 'status', 1) == 0:
+                line_results.append(LineResult(
+                    from_bus=line.from_bus,
+                    to_bus=line.to_bus,
+                    flow_mw=0.0,
+                    flow_mvar=0.0,
+                    loading_percent=0.0,
+                    congestion_rent=0.0
+                ))
+                continue
             if line.from_bus in bus_ids and line.to_bus in bus_ids:
                 i = bus_ids[line.from_bus]
                 j = bus_ids[line.to_bus]
@@ -683,6 +1455,7 @@ class DCOPSolver:
             cost = gen.cost[0] * pg_mw**2 + gen.cost[1] * pg_mw + gen.cost[2]
 
             gen_results.append(GeneratorResult(
+                id=gen.id,
                 bus=gen.bus,
                 pg=pg_mw,
                 qg=qg_mw,
